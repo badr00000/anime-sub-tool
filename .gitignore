@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# PyInstaller output (rebuild with: python build.py)
+build/
+dist/
+
+# Output produced when running on test_data
+test_data/PROCESSED/
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
