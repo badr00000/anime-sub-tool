@@ -52,6 +52,10 @@ class BatchProcessor:
             _log(f"Starting processing for episode {episode_num}")
             
             try:
+                if options.dry_run:
+                    res = self.processor.dry_run(match)
+                    _log(f"[DRY RUN] Episode {episode_num} would be written to {res.output_path}")
+                    return res
                 res = self.processor.process(match, progress_callback=local_progress)
                 if res.status == ProcessingStatus.FAILED:
                     _log(f"Failed processing episode {episode_num}: {res.message}", "ERROR")
