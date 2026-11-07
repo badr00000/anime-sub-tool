@@ -18,8 +18,8 @@ class SeriesInput(QWidget):
         layout.setSpacing(6)
 
         # Label
-        label = QLabel("Series Name (optional)")
-        label.setStyleSheet("font-weight: 600; color: #94a3b8; font-size: 12px;")
+        label = QLabel("SERIES NAME  (OPTIONAL)")
+        label.setProperty("role", "fieldLabel")
 
         # Input row
         row = QHBoxLayout()
@@ -29,7 +29,7 @@ class SeriesInput(QWidget):
         self.name_edit.setPlaceholderText("Leave empty to auto-detect from filenames...")
         self.name_edit.setMinimumHeight(40)
 
-        self.auto_btn = QPushButton("Auto-Detect")
+        self.auto_btn = QPushButton("AUTO")
         self.auto_btn.setFixedHeight(40)
         self.auto_btn.setFixedWidth(110)
         self.auto_btn.setCursor(Qt.CursorShape.PointingHandCursor)

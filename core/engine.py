@@ -79,6 +79,7 @@ class ProcessingEngine:
         batch_processor = BatchProcessor(
             processor, max_workers=options.parallel_workers or self.config.default_workers
         )
+        self._active_batch = batch_processor
 
         return batch_processor.process_all(
             matches=scan_result.matches,
@@ -86,6 +87,12 @@ class ProcessingEngine:
             progress_callback=progress_callback,
             log_callback=log_callback,
         )
+
+    def cancel(self) -> None:
+        """Stop a running batch: episodes not started yet are skipped, running ones finish."""
+        batch = getattr(self, "_active_batch", None)
+        if batch is not None:
+            batch.cancel()
 
     def process_single(self, match: EpisodeMatch, options: ProcessingOptions) -> ProcessingResult:
         """Process a single episode."""

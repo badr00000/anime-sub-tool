@@ -1,34 +1,48 @@
-import PyInstaller.__main__
-from pathlib import Path
+"""Build AnimeSubTool.exe — one self-contained file (Python, Qt, mkvmerge all inside).
+
+Usage:  py -3.11 build.py
+Output: dist/AnimeSubTool.exe
+"""
+
 import sys
+from pathlib import Path
+
+import PyInstaller.__main__
+
+ROOT = Path(__file__).parent.absolute()
+
 
 def build():
-    print("Building Anime Subtitle Automation Tool...")
-    
-    # Get project root
-    root_dir = Path(__file__).parent.absolute()
-    
+    print("Building Anime Subtitle Automation Tool (single file)...")
+
     args = [
-        str(root_dir / 'main.py'),
-        '--name=AnimeSubTool',
-        '--windowed',  # Hide console for GUI
-        '--icon=app_icon.ico', # New fluid icon
-        '--noconfirm', # Overwrite output dir
-        '--clean',
-        '--add-data=gui;gui', 
-        '--add-data=core;core',
-        '--add-data=cli;cli',
-        '--add-data=utils;utils',
-        '--add-data=bin;bin',
-        '--add-data=app_icon.ico;.',
+        str(ROOT / "main.py"),
+        "--name=AnimeSubTool",
+        "--onefile",            # everything packed into one .exe
+        "--windowed",           # no console window behind the GUI
+        f"--icon={ROOT / 'app_icon.ico'}",
+        "--noconfirm",
+        "--clean",
+        f"--distpath={ROOT / 'dist'}",
+        f"--workpath={ROOT / 'build'}",
+        f"--specpath={ROOT / 'build'}",
+        # Source packages are also shipped as data so path-based lookups
+        # (bin/mkvmerge.exe, gui/assets/*.svg) work inside the bundle.
+        f"--add-data={ROOT / 'gui'};gui",
+        f"--add-data={ROOT / 'core'};core",
+        f"--add-data={ROOT / 'cli'};cli",
+        f"--add-data={ROOT / 'utils'};utils",
+        f"--add-data={ROOT / 'bin'};bin",
+        f"--add-data={ROOT / 'app_icon.ico'};.",
     ]
-    
+
     try:
         PyInstaller.__main__.run(args)
-        print("\nBuild complete! Executable is in the 'dist' folder.")
     except Exception as e:
         print(f"Build failed: {e}")
         sys.exit(1)
+    print(f"\nBuild complete: {ROOT / 'dist' / 'AnimeSubTool.exe'}")
+
 
 if __name__ == "__main__":
     build()

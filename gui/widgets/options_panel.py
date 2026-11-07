@@ -5,6 +5,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
+from gui.theme import Colors
+
 # (label shown in the UI, value stored in ProcessingOptions.subtitle_charset)
 CHARSET_CHOICES = [
     ("Auto-detect (recommended)", "auto"),
@@ -37,17 +39,19 @@ class OptionsPanel(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setStyleSheet("QScrollArea { background: transparent; }")
         
         content_widget = QWidget()
         content_widget.setStyleSheet("QWidget { background: transparent; }")
         
         scroll_layout = QVBoxLayout(content_widget)
-        scroll_layout.setContentsMargins(0, 0, 10, 0)
+        scroll_layout.setContentsMargins(0, 0, 8, 0)
+        scroll_layout.setSpacing(4)
 
         
         # --- Presets Group ---
-        preset_group = QGroupBox("Configuration Presets")
+        preset_group = QGroupBox("PRESET")
         preset_layout = QHBoxLayout(preset_group)
         
         self.preset_combo = QComboBox()
@@ -58,10 +62,10 @@ class OptionsPanel(QWidget):
         
         self.preset_combo.currentTextChanged.connect(self._load_preset)
         
-        save_preset_btn = QPushButton("Save As")
+        save_preset_btn = QPushButton("SAVE")
         save_preset_btn.clicked.connect(self._save_preset)
         
-        del_preset_btn = QPushButton("Delete")
+        del_preset_btn = QPushButton("DEL")
         del_preset_btn.clicked.connect(self._delete_preset)
         
         preset_layout.addWidget(self.preset_combo, 1)
@@ -69,103 +73,71 @@ class OptionsPanel(QWidget):
         preset_layout.addWidget(del_preset_btn)
         
         # --- Filters Group ---
-        filter_group = QGroupBox("Advanced Filters")
+        filter_group = QGroupBox("TRACK FILTERS")
         filter_layout = QVBoxLayout(filter_group)
         
-        audio_layout = QHBoxLayout()
-        audio_layout.addWidget(QLabel("Keep Audio Langs:"))
         self.audio_input = QLineEdit("jpn")
-        self.audio_input.setPlaceholderText("e.g. jpn, eng (empty to keep all)")
-        audio_layout.addWidget(self.audio_input, 1)
-        
-        sub_layout = QHBoxLayout()
-        sub_layout.addWidget(QLabel("Keep Subtitle Langs:"))
+        self.audio_input.setPlaceholderText("jpn, eng (empty = keep all)")
         self.sub_input = QLineEdit("")
-        self.sub_input.setPlaceholderText("e.g. ara, eng (empty to strip all original)")
-        sub_layout.addWidget(self.sub_input, 1)
-        
-        filter_layout.addLayout(audio_layout)
-        filter_layout.addLayout(sub_layout)
+        self.sub_input.setPlaceholderText("ara, eng (empty = remove all)")
+        filter_layout.addWidget(self._field("KEEP AUDIO", self.audio_input))
+        filter_layout.addWidget(self._field("KEEP ORIGINAL SUBS", self.sub_input))
 
         # --- New Subtitle Group (timing + encoding) ---
-        subtitle_group = QGroupBox("⏱️ New Subtitle")
+        subtitle_group = QGroupBox("NEW SUBTITLE")
         subtitle_layout = QVBoxLayout(subtitle_group)
 
-        offset_layout = QHBoxLayout()
-        offset_layout.addWidget(QLabel("Shift timing:"))
         self.offset_spin = QDoubleSpinBox()
         self.offset_spin.setRange(-600.0, 600.0)
         self.offset_spin.setDecimals(3)
         self.offset_spin.setSingleStep(0.1)
         self.offset_spin.setSuffix(" s")
         self.offset_spin.setValue(0.0)
-        self.offset_spin.setFixedWidth(110)
         self.offset_spin.setToolTip("Positive = subtitle shows later (delay). Negative = shows earlier.")
-        offset_layout.addWidget(self.offset_spin)
-        offset_layout.addWidget(QLabel("(+ delay, − earlier)"))
-        offset_layout.addStretch()
 
-        charset_layout = QHBoxLayout()
-        charset_layout.addWidget(QLabel("Encoding:"))
         self.charset_combo = QComboBox()
         for label, value in CHARSET_CHOICES:
             self.charset_combo.addItem(label, value)
         self.charset_combo.setToolTip("Fixes Arabic text that shows up as garbage symbols.")
-        charset_layout.addWidget(self.charset_combo, 1)
 
-        subtitle_layout.addLayout(offset_layout)
-        subtitle_layout.addLayout(charset_layout)
+        subtitle_layout.addWidget(self._field("SHIFT TIMING   ( + LATER / − EARLIER )", self.offset_spin))
+        subtitle_layout.addWidget(self._field("ENCODING", self.charset_combo))
 
         # --- Track Metadata Editor Group ---
-        editor_group = QGroupBox("🔧 Modify Existing Tracks")
+        editor_group = QGroupBox("FIX EXISTING TRACK")
         editor_layout = QVBoxLayout(editor_group)
-        
-        row1 = QHBoxLayout()
-        row1.addWidget(QLabel("Target Track Lang:"))
+
         self.edit_target = QLineEdit("")
-        self.edit_target.setPlaceholderText("e.g. und (empty to disable)")
-        row1.addWidget(self.edit_target)
-        
-        row1.addWidget(QLabel("Convert To:"))
+        self.edit_target.setPlaceholderText("und (empty = off)")
         self.edit_new_lang = QLineEdit("ara")
-        row1.addWidget(self.edit_new_lang)
-        
-        row1.addWidget(QLabel("New Name:"))
         self.edit_new_name = QLineEdit("Arabic")
-        row1.addWidget(self.edit_new_name)
-        
-        editor_layout.addLayout(row1)
-        
-        self.isolate_track_cb = QCheckBox("🗑️ Delete all other original subtitles except this one")
+        editor_layout.addWidget(self._field("TRACK LANGUAGE TO FIX", self.edit_target))
+        pair = QHBoxLayout()
+        pair.setSpacing(8)
+        pair.addWidget(self._field("NEW LANGUAGE", self.edit_new_lang))
+        pair.addWidget(self._field("NEW NAME", self.edit_new_name))
+        editor_layout.addLayout(pair)
+
+        self.isolate_track_cb = QCheckBox("Remove all other original subtitles")
         self.isolate_track_cb.setChecked(False)
         editor_layout.addWidget(self.isolate_track_cb)
 
         # --- General Group ---
-        general_group = QGroupBox("General Options")
+        general_group = QGroupBox("OUTPUT")
         general_layout = QVBoxLayout(general_group)
 
-        self.subfolder_cb = QCheckBox("Create output subfolder (PROCESSED/)")
+        self.subfolder_cb = QCheckBox("Save into a PROCESSED/ subfolder")
         self.subfolder_cb.setChecked(True)
 
-        self.backup_cb = QCheckBox("Keep original files (backup)")
-        self.backup_cb.setChecked(False)
+        self.dry_run_cb = QCheckBox("Dry run (simulate, write nothing)")
 
-        self.dry_run_cb = QCheckBox("Dry run (simulate only)")
-
-        worker_layout = QHBoxLayout()
-        worker_label = QLabel("Worker threads:")
         self.worker_spin = QSpinBox()
         self.worker_spin.setRange(MIN_PARALLEL_WORKERS, MAX_PARALLEL_WORKERS)
         self.worker_spin.setValue(DEFAULT_PARALLEL_WORKERS)
-        self.worker_spin.setFixedWidth(60)
-        worker_layout.addWidget(worker_label)
-        worker_layout.addWidget(self.worker_spin)
-        worker_layout.addStretch()
 
         general_layout.addWidget(self.subfolder_cb)
-        general_layout.addWidget(self.backup_cb)
         general_layout.addWidget(self.dry_run_cb)
-        general_layout.addLayout(worker_layout)
+        general_layout.addWidget(self._field("EPISODES AT ONCE", self.worker_spin))
 
         scroll_layout.addWidget(preset_group)
         scroll_layout.addWidget(filter_group)
@@ -177,6 +149,20 @@ class OptionsPanel(QWidget):
         scroll.setWidget(content_widget)
         main_layout.addWidget(scroll)
         
+    @staticmethod
+    def _field(label: str, widget: QWidget) -> QWidget:
+        """A small caption above an input, so fields fit a narrow column."""
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 2, 0, 2)
+        lay.setSpacing(4)
+        cap = QLabel(label)
+        cap.setProperty("role", "fieldLabel")
+        cap.setStyleSheet(f"color: {Colors.text_muted}; font-size: 10px;")
+        lay.addWidget(cap)
+        lay.addWidget(widget)
+        return box
+
     def _load_preset(self, name: str):
         if not self.config or name == "Default":
             self.audio_input.setText("jpn")
@@ -186,7 +172,6 @@ class OptionsPanel(QWidget):
             self.edit_new_name.setText("Arabic")
             self.isolate_track_cb.setChecked(False)
             self.subfolder_cb.setChecked(True)
-            self.backup_cb.setChecked(False)
             self.dry_run_cb.setChecked(False)
             self.worker_spin.setValue(DEFAULT_PARALLEL_WORKERS)
             self.offset_spin.setValue(0.0)
@@ -202,7 +187,6 @@ class OptionsPanel(QWidget):
             self.edit_new_name.setText(preset.get("edit_new_name", "Arabic"))
             self.isolate_track_cb.setChecked(preset.get("isolate_edited_track", False))
             self.subfolder_cb.setChecked(preset.get("create_output_folder", True))
-            self.backup_cb.setChecked(preset.get("backup_originals", False))
             self.dry_run_cb.setChecked(preset.get("dry_run", False))
             self.worker_spin.setValue(preset.get("workers", DEFAULT_PARALLEL_WORKERS))
             self.offset_spin.setValue(preset.get("subtitle_offset_ms", 0) / 1000.0)
@@ -261,9 +245,6 @@ class OptionsPanel(QWidget):
             
             return ProcessingOptions(
                 create_output_folder=self.subfolder_cb.isChecked(),
-                create_backup=self.backup_cb.isChecked(),
-                backup_originals=self.backup_cb.isChecked(),
-                keep_original=self.backup_cb.isChecked(),
                 dry_run=self.dry_run_cb.isChecked(),
                 parallel_workers=self.worker_spin.value(),
                 workers=self.worker_spin.value(),

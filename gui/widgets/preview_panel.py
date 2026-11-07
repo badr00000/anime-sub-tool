@@ -2,6 +2,8 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QTableWidget, QTableWidgetIt
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 
+from gui.theme import Colors
+
 try:
     from core.models import ScanResult, MatchConfidence
 except ImportError:
@@ -18,10 +20,10 @@ class PreviewPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.summary_label = QLabel("0 files matched.")
-        self.summary_label.setStyleSheet("font-weight: bold; color: #f8fafc; font-size: 15px;")
+        self.summary_label.setProperty("role", "fieldLabel")
 
         self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["#", "Video File", "Subtitle File", "Confidence", "Status"])
+        self.table.setHorizontalHeaderLabels(["EP", "EPISODE FILE", "SUBTITLE FILE", "MATCH", "STATUS"])
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
@@ -31,6 +33,11 @@ class PreviewPanel(QWidget):
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setAlternatingRowColors(True)
+        # Keep both ends of long names visible: group tag on the left, episode number on the right
+        self.table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+        self.table.setWordWrap(False)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setShowGrid(False)
 
         layout.addWidget(self.summary_label)
         layout.addWidget(self.table)
@@ -45,8 +52,8 @@ class PreviewPanel(QWidget):
 
         unmatched_count = len(scan_result.unmatched_videos)
         self.summary_label.setText(
-            f"✓ {len(matches)} files matched.  "
-            f"{'⚠ ' + str(unmatched_count) + ' unmatched videos.' if unmatched_count else ''}"
+            f"// {len(matches)} EPISODES SCANNED"
+            + (f"   ·   <span style='color:{Colors.red}'>{unmatched_count} WITHOUT SUBTITLE</span>" if unmatched_count else "")
         )
 
         for i, match in enumerate(matches):
@@ -57,32 +64,34 @@ class PreviewPanel(QWidget):
 
             # Video filename
             vid_item = QTableWidgetItem(match.video.filename)
+            vid_item.setToolTip(match.video.filename)
 
             # Subtitle filename
             sub_name = match.subtitle.filename if match.subtitle else "— No match —"
             sub_item = QTableWidgetItem(sub_name)
+            sub_item.setToolTip(sub_name)
             if not match.subtitle:
-                sub_item.setForeground(QColor("#ef4444"))
+                sub_item.setForeground(QColor(Colors.red))
 
             # Confidence score
             score = match.score
             conf_item = QTableWidgetItem(f"{score:.0f}%")
             conf_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             if score >= 80:
-                conf_item.setForeground(QColor("#10b981"))
+                conf_item.setForeground(QColor(Colors.blue_bright))
             elif score >= 50:
-                conf_item.setForeground(QColor("#f59e0b"))
+                conf_item.setForeground(QColor(Colors.amber))
             else:
-                conf_item.setForeground(QColor("#ef4444"))
+                conf_item.setForeground(QColor(Colors.red))
 
             # Status
-            status_text = "Ready" if match.is_matched else "No Sub"
+            status_text = "READY" if match.is_matched else "NO SUB"
             status_item = QTableWidgetItem(status_text)
             status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             if not match.is_matched:
-                status_item.setForeground(QColor("#ef4444"))
+                status_item.setForeground(QColor(Colors.red))
             else:
-                status_item.setForeground(QColor("#10b981"))
+                status_item.setForeground(QColor(Colors.blue_bright))
 
             self.table.setItem(i, 0, ep_item)
             self.table.setItem(i, 1, vid_item)

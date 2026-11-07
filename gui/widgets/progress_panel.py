@@ -1,11 +1,76 @@
-"""Progress Panel — Real-time progress display during processing."""
+"""Progress Panel — neon progress ring with the current episode and stats."""
 
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar, QPushButton
-from PySide6.QtCore import Signal, Qt
+import time
+
+from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QConicalGradient, QFont, QPainter, QPen
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+
+from gui.theme import Colors
+
+
+class ProgressRing(QWidget):
+    """Circular progress: dim track, blue→red sweep, percentage in the middle."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._value = 0
+        self.setFixedSize(230, 230)
+
+    def set_value(self, value: int):
+        self._value = max(0, min(100, int(value)))
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        margin = 18
+        rect = QRectF(margin, margin, self.width() - 2 * margin, self.height() - 2 * margin)
+
+        # Tick marks around the ring
+        p.save()
+        p.translate(self.width() / 2, self.height() / 2)
+        tick_pen = QPen(QColor(Colors.border_hover), 1.2)
+        for i in range(60):
+            p.setPen(tick_pen if i * 100 / 60 > self._value else QPen(QColor(0, 183, 255, 110), 1.2))
+            p.drawLine(0, -self.height() / 2 + 3, 0, -self.height() / 2 + 8)
+            p.rotate(6)
+        p.restore()
+
+        # Track
+        p.setPen(QPen(QColor(Colors.border), 10, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
+        p.drawArc(rect, 0, 360 * 16)
+
+        # Sweep (starts at 12 o'clock, clockwise)
+        if self._value > 0:
+            grad = QConicalGradient(rect.center(), 90)
+            grad.setColorAt(0.0, QColor(Colors.blue_bright))
+            grad.setColorAt(0.6, QColor(Colors.blue))
+            grad.setColorAt(1.0, QColor(Colors.red))
+            # Outer glow pass then the sharp arc
+            glow = QPen(QColor(0, 183, 255, 45), 22, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap)
+            p.setPen(glow)
+            p.drawArc(rect, 90 * 16, int(-self._value * 3.6 * 16))
+            p.setPen(QPen(grad, 10, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
+            p.drawArc(rect, 90 * 16, int(-self._value * 3.6 * 16))
+
+        # Number
+        p.setPen(QColor(Colors.text))
+        f = QFont("Segoe UI", 38)
+        f.setWeight(QFont.Weight.Black)
+        p.setFont(f)
+        p.drawText(rect.adjusted(0, -12, 0, -12), Qt.AlignmentFlag.AlignCenter, f"{self._value}")
+        f2 = QFont("Consolas", 10)
+        f2.setBold(True)
+        f2.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 3)
+        p.setFont(f2)
+        p.setPen(QColor(Colors.blue))
+        p.drawText(rect.adjusted(0, 58, 0, 0), Qt.AlignmentFlag.AlignCenter, "PERCENT")
+        p.end()
 
 
 class ProgressPanel(QWidget):
-    """Displays processing progress with ETA and speed indicators."""
+    """Displays processing progress. Public API: update_progress(), reset(), cancel_requested."""
 
     cancel_requested = Signal()
 
@@ -14,77 +79,65 @@ class ProgressPanel(QWidget):
         self.setObjectName("progressPanel")
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(12)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
 
-        # Current file label
+        self.ring = ProgressRing()
+
         self.file_label = QLabel("Preparing...")
-        self.file_label.setStyleSheet("""
-            font-size: 16px;
-            font-weight: 700;
-            color: #f1f5f9;
-        """)
+        self.file_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.file_label.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {Colors.text};"
+                                      " letter-spacing: 1px; background: transparent;")
 
-        # Progress percentage
-        self.percent_label = QLabel("0%")
-        self.percent_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.percent_label.setStyleSheet("""
-            font-size: 36px;
-            font-weight: 800;
-            color: #a5b4fc;
-        """)
+        stats = QHBoxLayout()
+        self.speed_label = QLabel("SPEED  --")
+        self.eta_label = QLabel("ETA  --")
+        for lbl in (self.speed_label, self.eta_label):
+            lbl.setProperty("role", "fieldLabel")
+            lbl.setStyleSheet(f"color: {Colors.text_muted};")
+        stats.addStretch()
+        stats.addWidget(self.speed_label)
+        stats.addSpacing(30)
+        stats.addWidget(self.eta_label)
+        stats.addStretch()
 
-        # Progress bar
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setFixedHeight(20)
-        self.progress_bar.setTextVisible(False)
-
-        # Stats row
-        stats_layout = QHBoxLayout()
-        self.speed_label = QLabel("Speed: --")
-        self.speed_label.setStyleSheet("color: #94a3b8; font-size: 12px;")
-        self.eta_label = QLabel("ETA: --")
-        self.eta_label.setStyleSheet("color: #94a3b8; font-size: 12px;")
-
-        stats_layout.addWidget(self.speed_label)
-        stats_layout.addStretch()
-        stats_layout.addWidget(self.eta_label)
-
-        # Cancel button
-        self.cancel_btn = QPushButton("Cancel Processing")
+        self.cancel_btn = QPushButton("CANCEL")
         self.cancel_btn.setObjectName("dangerButton")
-        self.cancel_btn.setFixedHeight(36)
-        self.cancel_btn.setFixedWidth(180)
+        self.cancel_btn.setFixedSize(160, 36)
         self.cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.cancel_btn.clicked.connect(self.cancel_requested.emit)
 
+        self._started = time.monotonic()
+        layout.addWidget(self.ring, 0, Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.file_label)
-        layout.addWidget(self.percent_label)
-        layout.addWidget(self.progress_bar)
-        layout.addLayout(stats_layout)
+        layout.addLayout(stats)
         layout.addSpacing(4)
         layout.addWidget(self.cancel_btn, 0, Qt.AlignmentFlag.AlignCenter)
 
+    @staticmethod
+    def _clock(seconds: float) -> str:
+        seconds = int(max(0, seconds))
+        return f"{seconds // 60:02d}:{seconds % 60:02d}"
+
     def update_progress(self, current: int, total: int, file_name: str = "",
                         speed: str = "", eta: str = ""):
-        """Update progress display."""
-        self.file_label.setText(f"Processing: {file_name}" if file_name else "Processing...")
+        self.file_label.setText(f"PROCESSING  ·  {file_name.upper()}" if file_name else "PROCESSING")
+        pct = min(int(current * 100 / total), 100) if total > 0 else 0
+        self.ring.set_value(pct)
 
-        if total > 0:
-            pct = min(int((current / total) * 100), 100)
-            self.progress_bar.setValue(pct)
-            self.percent_label.setText(f"{pct}%")
-
-        if speed:
-            self.speed_label.setText(f"Speed: {speed}")
+        # Elapsed / remaining are computed here unless the caller supplies them
+        elapsed = time.monotonic() - self._started
+        self.speed_label.setText(f"ELAPSED  {speed or self._clock(elapsed)}")
         if eta:
-            self.eta_label.setText(f"ETA: {eta}")
+            self.eta_label.setText(f"ETA  {eta}")
+        elif 0 < pct < 100:
+            self.eta_label.setText(f"ETA  {self._clock(elapsed * (100 - pct) / pct)}")
+        elif pct >= 100:
+            self.eta_label.setText("ETA  00:00")
 
     def reset(self):
-        """Reset to initial state."""
-        self.progress_bar.setValue(0)
-        self.percent_label.setText("0%")
-        self.file_label.setText("Preparing...")
-        self.speed_label.setText("Speed: --")
-        self.eta_label.setText("ETA: --")
+        self._started = time.monotonic()
+        self.ring.set_value(0)
+        self.file_label.setText("PREPARING...")
+        self.speed_label.setText("ELAPSED  00:00")
+        self.eta_label.setText("ETA  --")

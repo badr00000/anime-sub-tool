@@ -10,13 +10,13 @@ import time
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QStackedWidget, QVBoxLayout, QWidget,
     QHBoxLayout, QPushButton, QMessageBox, QMenuBar, QMenu, QStatusBar,
-    QCheckBox
+    QCheckBox, QLabel, QFrame
 )
 from PySide6.QtCore import QThread, Signal, Qt, QTimer
 from PySide6.QtGui import QAction, QFont
 
-from gui.theme import get_stylesheet
-from gui.widgets.header import AppHeader
+from gui.theme import Colors, add_glow, get_stylesheet
+from gui.widgets.sidebar import Sidebar
 from gui.widgets.folder_picker import FolderPicker
 from gui.widgets.series_input import SeriesInput
 from gui.widgets.preview_panel import PreviewPanel
@@ -87,6 +87,11 @@ class ProcessWorker(QThread):
         self.scan_result = scan_result
         self.options = options
         self._start_time = 0
+        self._engine = None
+
+    def cancel(self):
+        if self._engine is not None:
+            self._engine.cancel()
 
     def run(self):
         try:
@@ -94,6 +99,7 @@ class ProcessWorker(QThread):
                 raise RuntimeError("Core engine not available.")
 
             engine = ProcessingEngine()
+            self._engine = engine
             self._start_time = time.time()
             self._processed = 0
             total = len(self.scan_result.matches)
@@ -128,8 +134,8 @@ class AnimeSubToolApp(QMainWindow):
         self.setMinimumSize(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
         self.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
 
-        # Apply theme
-        self.setStyleSheet(get_stylesheet())
+        # Apply theme to the whole application (dialogs and message boxes included)
+        QApplication.instance().setStyleSheet(get_stylesheet())
 
         # Set font
         font = QFont("Segoe UI", 10)
@@ -143,208 +149,180 @@ class AnimeSubToolApp(QMainWindow):
 
         # Build UI
         self._setup_ui()
-        self._setup_menu()
         self._setup_statusbar()
-
-    def _setup_menu(self):
-        menubar = self.menuBar()
-
-        # File menu
-        file_menu = menubar.addMenu("File")
-        settings_action = QAction("⚙ Settings", self)
-        settings_action.triggered.connect(self._show_settings)
-        file_menu.addAction(settings_action)
-        file_menu.addSeparator()
-        exit_action = QAction("Exit", self)
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
-
-        # Help menu
-        help_menu = menubar.addMenu("Help")
-        about_action = QAction("About", self)
-        about_action.triggered.connect(self._show_about)
-        help_menu.addAction(about_action)
 
     def _setup_statusbar(self):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Ready — Select a folder to begin")
 
+    @staticmethod
+    def _page_header(title: str, subtitle: str, accent: str = Colors.blue) -> QWidget:
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 6)
+        lay.setSpacing(4)
+        bar = QFrame()
+        bar.setFixedSize(46, 3)
+        bar.setStyleSheet(f"background: {accent}; border: none;")
+        t = QLabel(title)
+        t.setProperty("role", "pageTitle")
+        st = QLabel(subtitle)
+        st.setProperty("role", "pageSubtitle")
+        lay.addWidget(bar)
+        lay.addSpacing(6)
+        lay.addWidget(t)
+        lay.addWidget(st)
+        return box
+
     def _setup_ui(self):
-        try:
-            from gui.widgets.animated_background import AnimatedBackground
-            central = AnimatedBackground()
-        except ImportError:
-            central = QWidget()
-            
+        from gui.widgets.animated_background import AnimatedBackground
+        central = AnimatedBackground()
         self.setCentralWidget(central)
-        main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(24, 16, 24, 16)
-        main_layout.setSpacing(12)
 
-        # Header
-        self.header = AppHeader()
-        main_layout.addWidget(self.header)
+        root = QHBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # Step indicator
-        self.step_indicator = QWidget()
-        step_layout = QHBoxLayout(self.step_indicator)
-        step_layout.setContentsMargins(0, 0, 0, 0)
-        self.step_labels = []
-        steps = ["① Select Folder", "② Preview", "③ Processing", "④ Results"]
-        for i, text in enumerate(steps):
-            lbl = QPushButton(text)
-            lbl.setEnabled(False)
-            lbl.setFlat(True)
-            lbl.setStyleSheet("""
-                QPushButton {
-                    background: transparent;
-                    border: none;
-                    color: #4b5563;
-                    font-weight: bold;
-                    font-size: 13px;
-                    padding: 6px 12px;
-                }
-                QPushButton:disabled {
-                    color: #4b5563;
-                }
-            """)
-            step_layout.addWidget(lbl)
-            self.step_labels.append(lbl)
-        self._highlight_step(0)
-        main_layout.addWidget(self.step_indicator)
+        self.sidebar = Sidebar(APP_VERSION)
+        self.sidebar.settings_requested.connect(self._show_settings)
+        self.sidebar.about_requested.connect(self._show_about)
+        root.addWidget(self.sidebar)
 
-        # Stacked widget for steps
+        content = QWidget()
+        main_layout = QVBoxLayout(content)
+        main_layout.setContentsMargins(36, 30, 36, 24)
+        main_layout.setSpacing(0)
+        root.addWidget(content, 1)
+
         self.stack = QStackedWidget()
 
         # ─── Step 1: Input ───
         step1 = QWidget()
         s1_layout = QVBoxLayout(step1)
+        s1_layout.setContentsMargins(0, 0, 0, 0)
         s1_layout.setSpacing(16)
 
         self.folder_picker = FolderPicker()
         self.folder_picker.path_changed.connect(self._on_path_changed)
-        
+
         self.series_input = SeriesInput()
-        
-        self.watch_cb = QCheckBox("👀 Enable Watch Folder (Auto-scan on new files)")
-        self.watch_cb.setStyleSheet("font-weight: bold; color: #a5b4fc;")
+        self.series_input.auto_detect_requested.connect(self._auto_detect_series)
+
+        self.watch_cb = QCheckBox("Watch folder — rescan automatically when new files arrive")
         self.watch_cb.toggled.connect(self._toggle_watcher)
         self.watcher = None
 
-        self.scan_btn = QPushButton("🔍  Scan Folder")
+        self.scan_btn = QPushButton("SCAN FOLDER  ▸")
         self.scan_btn.setObjectName("primaryButton")
-        self.scan_btn.setFixedHeight(44)
-        self.scan_btn.setFixedWidth(240)
+        self.scan_btn.setFixedSize(230, 48)
         self.scan_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.scan_btn.clicked.connect(self._run_scan)
+        add_glow(self.scan_btn, Colors.blue, 28)
 
-        s1_layout.addStretch(1)
+        actions = QHBoxLayout()
+        actions.addWidget(self.watch_cb)
+        actions.addStretch()
+        actions.addWidget(self.scan_btn)
+
+        s1_layout.addWidget(self._page_header(
+            "SELECT SOURCE", "Pick the folder that holds the season's episodes and its subtitle files."))
+        s1_layout.addSpacing(8)
         s1_layout.addWidget(self.folder_picker)
         s1_layout.addWidget(self.series_input)
-        s1_layout.addSpacing(10)
-        s1_layout.addWidget(self.watch_cb, 0, Qt.AlignmentFlag.AlignCenter)
-        s1_layout.addWidget(self.scan_btn, 0, Qt.AlignmentFlag.AlignCenter)
-        s1_layout.addStretch(2)
+        s1_layout.addStretch(1)
+        s1_layout.addLayout(actions)
 
         # ─── Step 2: Preview ───
         step2 = QWidget()
         s2_layout = QVBoxLayout(step2)
-        s2_layout.setSpacing(12)
+        s2_layout.setContentsMargins(0, 0, 0, 0)
+        s2_layout.setSpacing(14)
 
         self.preview_panel = PreviewPanel()
         self.options_panel = OptionsPanel()
+        self.options_panel.setFixedWidth(340)
+
+        split = QHBoxLayout()
+        split.setSpacing(18)
+        split.addWidget(self.preview_panel, 1)
+        split.addWidget(self.options_panel)
 
         nav2 = QHBoxLayout()
-        back2_btn = QPushButton("← Back")
+        back2_btn = QPushButton("◂  BACK")
+        back2_btn.setFixedHeight(44)
         back2_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         back2_btn.clicked.connect(lambda: self._go_to_step(0))
-        self.process_btn = QPushButton("▶  Start Processing")
+        self.process_btn = QPushButton("START PROCESSING  ▸")
         self.process_btn.setObjectName("primaryButton")
-        self.process_btn.setFixedHeight(42)
+        self.process_btn.setFixedSize(250, 48)
         self.process_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.process_btn.clicked.connect(self._start_processing)
+        add_glow(self.process_btn, Colors.blue, 28)
         nav2.addWidget(back2_btn)
         nav2.addStretch()
         nav2.addWidget(self.process_btn)
 
-        s2_layout.addWidget(self.preview_panel, 1)
-        s2_layout.addWidget(self.options_panel)
+        s2_layout.addWidget(self._page_header(
+            "PREVIEW", "Check every episode got the right subtitle, then tune the options on the right."))
+        s2_layout.addLayout(split, 1)
         s2_layout.addLayout(nav2)
 
         # ─── Step 3: Processing ───
         step3 = QWidget()
         s3_layout = QVBoxLayout(step3)
-        s3_layout.setSpacing(12)
+        s3_layout.setContentsMargins(0, 0, 0, 0)
+        s3_layout.setSpacing(16)
 
         self.progress_panel = ProgressPanel()
+        self.progress_panel.cancel_requested.connect(self._cancel_processing)
         self.log_panel = LogPanel()
 
+        s3_layout.addWidget(self._page_header(
+            "PROCESSING", "Merging subtitles and cleaning tracks. The original files are never modified."))
         s3_layout.addWidget(self.progress_panel)
         s3_layout.addWidget(self.log_panel, 1)
 
         # ─── Step 4: Results ───
         step4 = QWidget()
         s4_layout = QVBoxLayout(step4)
+        s4_layout.setContentsMargins(0, 0, 0, 0)
 
         self.results_panel = ResultsPanel()
         self.results_panel.process_another_requested.connect(lambda: self._go_to_step(0))
         self.results_panel.open_folder_requested.connect(self._open_output_folder)
-
         s4_layout.addWidget(self.results_panel)
 
-        # Add steps to stack
-        self.stack.addWidget(step1)
-        self.stack.addWidget(step2)
-        self.stack.addWidget(step3)
-        self.stack.addWidget(step4)
-
+        for page in (step1, step2, step3, step4):
+            self.stack.addWidget(page)
         main_layout.addWidget(self.stack, 1)
-
-    def _highlight_step(self, step_index: int):
-        """Highlight current step in the step indicator."""
-        for i, lbl in enumerate(self.step_labels):
-            if i == step_index:
-                lbl.setStyleSheet("""
-                    QPushButton {
-                        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                            stop:0 #6366f1, stop:1 #8b5cf6);
-                        border: none;
-                        border-radius: 6px;
-                        color: white;
-                        font-weight: bold;
-                        font-size: 13px;
-                        padding: 6px 12px;
-                    }
-                """)
-            elif i < step_index:
-                lbl.setStyleSheet("""
-                    QPushButton {
-                        background: transparent;
-                        border: none;
-                        color: #10b981;
-                        font-weight: bold;
-                        font-size: 13px;
-                        padding: 6px 12px;
-                    }
-                """)
-            else:
-                lbl.setStyleSheet("""
-                    QPushButton {
-                        background: transparent;
-                        border: none;
-                        color: #4b5563;
-                        font-weight: bold;
-                        font-size: 13px;
-                        padding: 6px 12px;
-                    }
-                """)
 
     def _go_to_step(self, step: int):
         self.stack.setCurrentIndex(step)
-        self._highlight_step(step)
+        self.sidebar.set_step(step)
+
+    def _cancel_processing(self):
+        if self._process_worker is not None and self._process_worker.isRunning():
+            self._process_worker.cancel()
+            self.progress_panel.cancel_btn.setEnabled(False)
+            self.progress_panel.cancel_btn.setText("CANCELLING…")
+            self.log_panel.append_log(
+                "Cancel requested: episodes already running will finish, the rest are skipped.", "WARNING")
 
     # ─── Step 1: Scan ───
+
+    def _auto_detect_series(self):
+        from pathlib import Path
+        from core.matcher import auto_detect_series_name, scan_folder
+
+        path = self.folder_picker.get_path()
+        if not path or not Path(path).is_dir():
+            QMessageBox.warning(self, "Warning", "Please select a folder first.")
+            return
+        videos, subtitles = scan_folder(Path(path))
+        name = auto_detect_series_name(videos + subtitles)
+        self.series_input.set_series_name(name)
+        self.status_bar.showMessage(f"Detected series name: {name}")
 
     def _on_path_changed(self, new_path: str):
         if self.watch_cb.isChecked():
@@ -389,7 +367,7 @@ class AnimeSubToolApp(QMainWindow):
             return
 
         self.scan_btn.setEnabled(False)
-        self.scan_btn.setText("⏳ Scanning...")
+        self.scan_btn.setText("SCANNING…")
         self.status_bar.showMessage("Scanning folder...")
 
         series = self.series_input.get_series_name()
@@ -401,7 +379,7 @@ class AnimeSubToolApp(QMainWindow):
 
     def _on_scan_completed(self, result):
         self.scan_btn.setEnabled(True)
-        self.scan_btn.setText("🔍  Scan Folder")
+        self.scan_btn.setText("SCAN FOLDER  ▸")
         self.scan_result = result
 
         match_count = len(result.matches)
@@ -424,7 +402,7 @@ class AnimeSubToolApp(QMainWindow):
 
     def _on_scan_error(self, err):
         self.scan_btn.setEnabled(True)
-        self.scan_btn.setText("🔍  Scan Folder")
+        self.scan_btn.setText("SCAN FOLDER  ▸")
         self.status_bar.showMessage("Scan failed")
         QMessageBox.critical(self, "Scan Error", f"Failed to scan folder:\n\n{err}")
 
@@ -440,6 +418,8 @@ class AnimeSubToolApp(QMainWindow):
 
         self._go_to_step(2)
         self.progress_panel.reset()
+        self.progress_panel.cancel_btn.setEnabled(True)
+        self.progress_panel.cancel_btn.setText("CANCEL")
         self.log_panel.clear()
         self.status_bar.showMessage("Processing...")
 

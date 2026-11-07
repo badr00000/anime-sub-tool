@@ -30,13 +30,13 @@ class AboutDialog(QDialog):
             font-size: 24px;
             font-weight: 800;
             color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 #a5b4fc, stop:1 #f0abfc);
+                stop:0 #5fd6ff, stop:1 #ff2b4e);
         """)
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Version
         version = QLabel(f"Version {APP_VERSION}")
-        version.setStyleSheet("font-size: 14px; color: #a5b4fc; font-weight: bold;")
+        version.setStyleSheet("font-size: 14px; color: #00b7ff; font-weight: bold;")
         version.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Description
@@ -45,12 +45,12 @@ class AboutDialog(QDialog):
             "and standardizing anime subtitles and audio tracks.\n\n"
             "Powered by MKVToolNix, Anitopy, and PySide6."
         )
-        desc.setStyleSheet("font-size: 13px; color: #94a3b8; line-height: 1.5;")
+        desc.setStyleSheet("font-size: 13px; color: #9db0c6; line-height: 1.5;")
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Author / Credits
         credits = QLabel("Designed for AI Development Team Workflow")
-        credits.setStyleSheet("font-size: 12px; color: #64748b; font-style: italic;")
+        credits.setStyleSheet("font-size: 12px; color: #55667c; font-style: italic;")
         credits.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Button

@@ -29,7 +29,7 @@ class SettingsDialog(QDialog):
 
         # Title
         title = QLabel("Settings")
-        title.setStyleSheet("font-size: 20px; font-weight: 700; color: #a5b4fc;")
+        title.setStyleSheet("font-size: 20px; font-weight: 700; color: #00b7ff; letter-spacing: 2px;")
         layout.addWidget(title)
 
         # MKVToolNix section

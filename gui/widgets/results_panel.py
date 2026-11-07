@@ -1,5 +1,7 @@
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+
+from gui.theme import Colors, add_glow
 
 
 class ResultsPanel(QWidget):
@@ -11,98 +13,97 @@ class ResultsPanel(QWidget):
         self.setObjectName("resultsPanel")
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(20)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(18)
 
-        # Title
-        self.title = QLabel("✅ Processing Complete")
-        self.title.setStyleSheet("font-size: 26px; color: #10b981; font-weight: bold;")
+        self.title = QLabel("MISSION COMPLETE")
         self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.subtitle = QLabel("")
+        self.subtitle.setProperty("role", "pageSubtitle")
+        self.subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Summary cards
-        cards_layout = QHBoxLayout()
-        cards_layout.setSpacing(12)
+        cards = QHBoxLayout()
+        cards.setSpacing(14)
+        self.total_card, self.total_value = self._make_card("TOTAL", Colors.text)
+        self.success_card, self.success_value = self._make_card("DONE", Colors.blue_bright)
+        self.failed_card, self.failed_value = self._make_card("FAILED", Colors.red)
+        self.skipped_card, self.skipped_value = self._make_card("CANCELLED", Colors.text_muted)
+        for card in (self.total_card, self.success_card, self.failed_card, self.skipped_card):
+            cards.addWidget(card)
 
-        self.total_card, self.total_value = self._make_card("Total", "0", "#6366f1")
-        self.success_card, self.success_value = self._make_card("Succeeded", "0", "#10b981")
-        self.failed_card, self.failed_value = self._make_card("Failed", "0", "#ef4444")
-        self.skipped_card, self.skipped_value = self._make_card("Skipped", "0", "#9ca3af")
-
-        cards_layout.addWidget(self.total_card)
-        cards_layout.addWidget(self.success_card)
-        cards_layout.addWidget(self.failed_card)
-        cards_layout.addWidget(self.skipped_card)
-
-        # Time stats
-        self.time_lbl = QLabel("")
-        self.time_lbl.setStyleSheet("color: #9ca3af; font-size: 14px;")
-        self.time_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # Buttons
-        btn_layout = QHBoxLayout()
-        self.open_btn = QPushButton("📂  Open Output Folder")
+        buttons = QHBoxLayout()
+        self.open_btn = QPushButton("OPEN OUTPUT FOLDER")
+        self.open_btn.setFixedHeight(44)
         self.open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.open_btn.clicked.connect(self.open_folder_requested.emit)
-        self.another_btn = QPushButton("🔄  Process Another Folder")
+        self.another_btn = QPushButton("NEW SEASON  ▸")
         self.another_btn.setObjectName("primaryButton")
-        self.another_btn.setFixedHeight(42)
+        self.another_btn.setFixedHeight(44)
+        self.another_btn.setMinimumWidth(200)
         self.another_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.another_btn.clicked.connect(self.process_another_requested.emit)
+        add_glow(self.another_btn, Colors.blue, 26)
+        buttons.addStretch()
+        buttons.addWidget(self.open_btn)
+        buttons.addSpacing(10)
+        buttons.addWidget(self.another_btn)
+        buttons.addStretch()
 
-        btn_layout.addWidget(self.open_btn)
-        btn_layout.addStretch()
-        btn_layout.addWidget(self.another_btn)
+        # Keep a reference so the old API (time_lbl) still exists for callers
+        self.time_lbl = self.subtitle
 
         layout.addStretch()
         layout.addWidget(self.title)
-        layout.addSpacing(10)
-        layout.addLayout(cards_layout)
-        layout.addWidget(self.time_lbl)
+        layout.addWidget(self.subtitle)
+        layout.addSpacing(14)
+        layout.addLayout(cards)
+        layout.addSpacing(18)
+        layout.addLayout(buttons)
         layout.addStretch()
-        layout.addLayout(btn_layout)
+        self._style_title(Colors.blue_bright, Colors.blue)
 
-    def _make_card(self, title: str, value: str, color: str) -> tuple[QFrame, QLabel]:
-        """Create a summary card widget. Returns (frame, value_label)."""
-        frame = QFrame(self)  # Parent to self to prevent GC
-        frame.setStyleSheet(f"""
-            QFrame {{
-                background-color: #1a1f2e;
-                border: 1px solid #374151;
-                border-radius: 12px;
-                padding: 16px;
-            }}
-        """)
-        frame.setMinimumWidth(140)
+    def _style_title(self, color: str, glow: str):
+        self.title.setStyleSheet(f"font-size: 34px; font-weight: 900; letter-spacing: 6px;"
+                                 f" color: {color}; background: transparent;")
+        add_glow(self.title, glow, 30)
 
-        flayout = QVBoxLayout(frame)
-        flayout.setSpacing(4)
+    def _make_card(self, title: str, color: str) -> tuple[QFrame, QLabel]:
+        frame = QFrame(self)
+        frame.setObjectName("card")
+        frame.setStyleSheet(f"QFrame#card {{ border-top: 2px solid {color}; }}")
+        frame.setMinimumSize(150, 120)
 
-        title_lbl = QLabel(title)
-        title_lbl.setStyleSheet("color: #9ca3af; font-size: 12px; background: transparent;")
-        title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        value_lbl = QLabel(value)
-        value_lbl.setStyleSheet(f"font-size: 28px; font-weight: bold; color: {color}; background: transparent;")
-        value_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        flayout.addWidget(title_lbl)
-        flayout.addWidget(value_lbl)
-
-        return frame, value_lbl
+        f = QVBoxLayout(frame)
+        f.setContentsMargins(16, 16, 16, 16)
+        value = QLabel("0")
+        value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        value.setStyleSheet(f"font-size: 40px; font-weight: 900; color: {color}; background: transparent;")
+        label = QLabel(title)
+        label.setProperty("role", "fieldLabel")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setStyleSheet(f"color: {Colors.text_muted};")
+        f.addWidget(value)
+        f.addWidget(label)
+        return frame, value
 
     def show_results(self, result):
-        """Populate results from a BatchResult."""
         if not result:
             return
-
         self.total_value.setText(str(result.total))
         self.success_value.setText(str(result.successful))
         self.failed_value.setText(str(result.failed))
-        self.skipped_value.setText(str(getattr(result, 'skipped', 0)))
+        self.skipped_value.setText(str(getattr(result, "cancelled", 0)))
 
-        # Update title color based on results
         if result.failed > 0:
-            self.title.setText("⚠️ Processing Complete (with errors)")
-            self.title.setStyleSheet("font-size: 26px; color: #f59e0b; font-weight: bold;")
+            self.title.setText("COMPLETED WITH ERRORS")
+            reasons = [r.message for r in getattr(result, "results", [])
+                       if getattr(r, "status", None) is not None and r.status.name == "FAILED" and r.message]
+            shown = "\n".join(f"✕ {m}" for m in reasons[:3])
+            more = f"\n…and {len(reasons) - 3} more" if len(reasons) > 3 else ""
+            self.subtitle.setText(shown + more if shown else "Some episodes failed.")
+            self.subtitle.setWordWrap(True)
+            self._style_title(Colors.red_bright, Colors.red)
         else:
-            self.title.setText("✅ Processing Complete!")
-            self.title.setStyleSheet("font-size: 26px; color: #10b981; font-weight: bold;")
+            self.title.setText("MISSION COMPLETE")
+            self.subtitle.setText("Your episodes are ready in the output folder.")
+            self._style_title(Colors.blue_bright, Colors.blue)

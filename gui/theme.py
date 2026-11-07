@@ -1,216 +1,351 @@
 """
-Anime Subtitle Automation Tool v3.0 — Glassmorphism Theme
+Anime Subtitle Automation Tool — Neon theme
 
-A breathtaking translucent theme that allows animated backgrounds to shine through.
-Uses semi-transparent RGBA backgrounds and soft frosty borders.
+Pure black base, neon blue as the main accent, neon red for alerts and the
+second accent. Sharp corners, thin glowing borders, monospace labels.
+All colours live in `Colors` so widgets never hard-code a hex value.
 """
 
-from dataclasses import dataclass
+from pathlib import Path
 
-@dataclass
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QGraphicsDropShadowEffect, QWidget
+
+# Icons used by the stylesheet (also bundled inside the .exe with the gui folder)
+ASSETS = (Path(__file__).resolve().parent / "assets").as_posix()
+
+
 class Colors:
-    """Glassmorphism color palette."""
-    # Translucent backgrounds
-    bg_window: str = "transparent"
-    bg_panel: str = "rgba(15, 23, 42, 0.45)"       # Main panels (semi-transparent dark blue)
-    bg_card: str = "rgba(30, 41, 59, 0.55)"        # Cards/Groups
-    bg_input: str = "rgba(15, 23, 42, 0.6)"        # Inputs (slightly darker for contrast)
-    bg_hover: str = "rgba(51, 65, 85, 0.6)"        # Hover state
-    bg_pressed: str = "rgba(15, 23, 42, 0.8)"      # Pressed state
-    
-    # Frosty Borders
-    border_subtle: str = "rgba(255, 255, 255, 0.08)"
-    border_focus: str = "rgba(99, 102, 241, 0.8)"  # Indigo border for focus
-    
-    # Vibrant Accents
-    accent: str = "#6366f1"                        # Indigo
-    accent_hover: str = "#818cf8"                  # Light Indigo
-    success: str = "#10b981"                       # Emerald
-    warning: str = "#f59e0b"                       # Amber
-    danger: str = "#ef4444"                        # Red
-    
+    # Surfaces
+    bg: str = "#04060a"
+    bg_panel: str = "rgba(8, 12, 20, 0.88)"
+    bg_card: str = "rgba(10, 15, 24, 0.92)"
+    bg_input: str = "#060a11"
+    bg_hover: str = "#0e1724"
+    bg_row_alt: str = "rgba(14, 22, 34, 0.55)"
+
+    # Lines
+    border: str = "#152131"
+    border_hover: str = "#24394f"
+
+    # Neon blue (primary)
+    blue: str = "#00b7ff"
+    blue_bright: str = "#5fd6ff"
+    blue_deep: str = "#0077cc"
+    blue_glow: str = "rgba(0, 183, 255, 0.16)"
+
+    # Neon red (secondary / alerts)
+    red: str = "#ff2b4e"
+    red_bright: str = "#ff6680"
+    red_deep: str = "#b3122f"
+    red_glow: str = "rgba(255, 43, 78, 0.16)"
+
+    # Warnings only (kept rare so blue/red stay the identity)
+    amber: str = "#ffb020"
+
     # Text
-    text_primary: str = "#f8fafc"
-    text_secondary: str = "#cbd5e1"
-    text_muted: str = "#94a3b8"
+    text: str = "#e6f0ff"
+    text_secondary: str = "#9db0c6"
+    text_muted: str = "#55667c"
+
+    # Fonts
+    font_ui: str = "'Segoe UI', 'Inter', sans-serif"
+    font_mono: str = "'Cascadia Mono', 'Consolas', monospace"
+
+
+def add_glow(widget: QWidget, color: str = Colors.blue, radius: int = 22) -> None:
+    """Soft neon glow around a widget (use sparingly: each one costs a repaint pass)."""
+    effect = QGraphicsDropShadowEffect(widget)
+    effect.setColor(QColor(color))
+    effect.setBlurRadius(radius)
+    effect.setOffset(0, 0)
+    widget.setGraphicsEffect(effect)
 
 
 def get_stylesheet() -> str:
-    """Returns the main application stylesheet utilizing Glassmorphism."""
+    c = Colors
     return f"""
-    /* Global Settings */
     QWidget {{
-        color: {Colors.text_primary};
-        font-family: 'Segoe UI', -apple-system, sans-serif;
+        color: {c.text};
+        font-family: {c.font_ui};
+        font-size: 13px;
     }}
-    
-    QMainWindow {{
-        background: {Colors.bg_window};
+    QMainWindow, QDialog {{
+        background: {c.bg};
     }}
-
-    /* Panels and Cards (Glass Effect) */
-    QStackedWidget, QDialog {{
+    QStackedWidget, QScrollArea, QScrollArea > QWidget > QWidget {{
         background: transparent;
     }}
-    
+    QToolTip {{
+        background: {c.bg_input};
+        color: {c.text};
+        border: 1px solid {c.blue};
+        padding: 6px;
+    }}
+
+    /* ── Text roles (set with setProperty("role", ...)) ── */
+    QLabel[role="pageTitle"] {{
+        font-size: 26px;
+        font-weight: 800;
+        letter-spacing: 3px;
+        color: {c.text};
+        background: transparent;
+    }}
+    QLabel[role="pageSubtitle"] {{
+        font-size: 13px;
+        color: {c.text_secondary};
+        background: transparent;
+    }}
+    QLabel[role="fieldLabel"] {{
+        font-family: {c.font_mono};
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 2px;
+        color: {c.blue};
+        background: transparent;
+    }}
+    QLabel[role="hint"] {{
+        font-size: 12px;
+        color: {c.text_muted};
+        background: transparent;
+    }}
+    QLabel[role="ok"] {{ color: {c.blue_bright}; font-size: 12px; background: transparent; }}
+    QLabel[role="bad"] {{ color: {c.red}; font-size: 12px; background: transparent; }}
+
+    /* ── Cards ── */
     QGroupBox {{
-        background-color: {Colors.bg_card};
-        border: 1px solid {Colors.border_subtle};
-        border-radius: 12px;
-        margin-top: 24px;
-        padding-top: 16px;
+        background-color: {c.bg_card};
+        border: 1px solid {c.border};
+        border-left: 2px solid {c.blue};
+        border-radius: 2px;
+        margin-top: 22px;
+        padding: 10px 12px 12px 12px;
+        font-family: {c.font_mono};
+        font-size: 11px;
+        font-weight: 700;
     }}
     QGroupBox::title {{
         subcontrol-origin: margin;
         subcontrol-position: top left;
-        padding: 4px 12px;
-        background-color: {Colors.bg_panel};
-        border: 1px solid {Colors.border_subtle};
-        border-radius: 8px;
-        color: {Colors.text_primary};
-        font-weight: 600;
-        left: 12px;
+        left: 0px;
+        padding: 2px 10px;
+        font-family: {c.font_mono};
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 2px;
+        color: {c.blue};
+        background: transparent;
+    }}
+    QFrame#card {{
+        background-color: {c.bg_card};
+        border: 1px solid {c.border};
+        border-radius: 2px;
     }}
 
-    /* Inputs (Slightly darker glass) */
-    QLineEdit, QSpinBox, QComboBox {{
-        background-color: {Colors.bg_input};
-        border: 1px solid {Colors.border_subtle};
-        border-radius: 8px;
-        padding: 8px 12px;
-        color: {Colors.text_primary};
-        selection-background-color: {Colors.accent};
+    /* ── Inputs ── */
+    QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
+        background-color: {c.bg_input};
+        border: 1px solid {c.border};
+        border-radius: 2px;
+        padding: 7px 10px;
+        min-height: 18px;
+        color: {c.text};
+        selection-background-color: {c.blue_deep};
     }}
-    QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{
-        border: 1px solid {Colors.border_focus};
-        background-color: {Colors.bg_card};
+    QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover {{
+        border-color: {c.border_hover};
     }}
-    
-    /* Dropdown Menus */
-    QComboBox::drop-down {{
+    QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{
+        border: 1px solid {c.blue};
+        background-color: #08101a;
+    }}
+    QLineEdit[state="ok"] {{ border: 1px solid {c.blue}; }}
+    QLineEdit[state="bad"] {{ border: 1px solid {c.red}; }}
+
+    QSpinBox::up-button, QSpinBox::down-button,
+    QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
+        width: 18px;
         border: none;
-        width: 24px;
+        background: {c.bg_hover};
+    }}
+    QSpinBox::up-button:hover, QSpinBox::down-button:hover,
+    QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {{
+        background: {c.blue_glow};
+    }}
+    QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
+        image: url({ASSETS}/arrow_up.svg); width: 9px; height: 5px;
+    }}
+    QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
+        image: url({ASSETS}/arrow_down.svg); width: 9px; height: 5px;
+    }}
+
+    QComboBox::drop-down {{ border: none; width: 28px; }}
+    QComboBox::down-arrow {{
+        image: url({ASSETS}/arrow_down.svg); width: 10px; height: 6px;
     }}
     QComboBox QAbstractItemView {{
-        background-color: {Colors.bg_card};
-        border: 1px solid {Colors.border_subtle};
-        border-radius: 8px;
-        selection-background-color: {Colors.accent};
+        background-color: {c.bg_input};
+        border: 1px solid {c.blue};
+        selection-background-color: {c.blue_glow};
+        selection-color: {c.blue_bright};
         outline: none;
     }}
 
-    /* Buttons (Vibrant & Interactive) */
+    QCheckBox {{ spacing: 8px; background: transparent; }}
+    QCheckBox::indicator {{
+        width: 14px; height: 14px;
+        border: 1px solid {c.border_hover};
+        background: {c.bg_input};
+    }}
+    QCheckBox::indicator:hover {{ border-color: {c.blue}; }}
+    QCheckBox::indicator:checked {{
+        background: {c.blue};
+        border: 1px solid {c.blue_bright};
+        image: url({ASSETS}/check.svg);
+    }}
+
+    /* ── Buttons ── */
     QPushButton {{
-        background-color: {Colors.bg_card};
-        border: 1px solid {Colors.border_subtle};
-        border-radius: 8px;
-        padding: 8px 16px;
-        color: {Colors.text_primary};
+        background-color: transparent;
+        border: 1px solid {c.border_hover};
+        border-radius: 2px;
+        padding: 8px 18px;
+        color: {c.text_secondary};
         font-weight: 600;
+        letter-spacing: 1px;
     }}
     QPushButton:hover {{
-        background-color: {Colors.bg_hover};
-        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-color: {c.blue};
+        color: {c.blue_bright};
+        background-color: {c.blue_glow};
     }}
-    QPushButton:pressed {{
-        background-color: {Colors.bg_pressed};
-    }}
-    
-    /* Primary Accent Button */
+    QPushButton:pressed {{ background-color: rgba(0, 183, 255, 0.28); }}
+    QPushButton:disabled {{ color: {c.text_muted}; border-color: {c.border}; }}
+
     QPushButton#primaryButton {{
-        background-color: {Colors.accent};
-        border: none;
-        color: white;
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+            stop:0 {c.blue_deep}, stop:1 {c.blue});
+        border: 1px solid {c.blue_bright};
+        color: #ffffff;
+        font-weight: 800;
+        letter-spacing: 2px;
     }}
     QPushButton#primaryButton:hover {{
-        background-color: {Colors.accent_hover};
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+            stop:0 {c.blue}, stop:1 {c.blue_bright});
+        color: #001018;
     }}
-    QPushButton#primaryButton:pressed {{
-        background-color: #4f46e5;
+    QPushButton#primaryButton:disabled {{
+        background: {c.bg_hover};
+        border-color: {c.border};
+        color: {c.text_muted};
     }}
 
-    /* Scrollbars */
-    QScrollBar:vertical {{
+    QPushButton#dangerButton {{
+        border: 1px solid {c.red};
+        color: {c.red_bright};
+        background: {c.red_glow};
+        letter-spacing: 2px;
+    }}
+    QPushButton#dangerButton:hover {{
+        background: {c.red};
+        color: #ffffff;
+    }}
+
+    /* Sidebar navigation */
+    QPushButton#navButton {{
+        text-align: left;
+        border: none;
+        border-left: 3px solid transparent;
+        padding: 12px 16px;
+        color: {c.text_muted};
+        font-family: {c.font_mono};
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 2px;
         background: transparent;
-        width: 10px;
-        margin: 0px;
     }}
-    QScrollBar::handle:vertical {{
-        background: {Colors.bg_hover};
-        min-height: 20px;
-        border-radius: 5px;
-        margin: 2px;
+    QPushButton#navButton[state="active"] {{
+        border-left: 3px solid {c.blue};
+        color: {c.blue_bright};
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+            stop:0 rgba(0, 183, 255, 0.22), stop:1 rgba(0, 183, 255, 0));
     }}
-    QScrollBar::handle:vertical:hover {{
-        background: {Colors.text_muted};
+    QPushButton#navButton[state="done"] {{
+        color: {c.text_secondary};
     }}
-    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-        height: 0px;
+    QPushButton#linkButton {{
+        border: none;
+        padding: 6px 4px;
+        color: {c.text_muted};
+        font-size: 12px;
+        text-align: left;
+        background: transparent;
+    }}
+    QPushButton#linkButton:hover {{ color: {c.blue_bright}; background: transparent; }}
+
+    /* ── Sidebar frame ── */
+    QFrame#sidebar {{
+        background-color: rgba(4, 7, 12, 0.94);
+        border: none;
+        border-right: 1px solid {c.border};
     }}
 
-    /* Tables/Lists (Translucent Rows) */
-    QTableWidget, QListView {{
-        background-color: {Colors.bg_card};
-        border: 1px solid {Colors.border_subtle};
-        border-radius: 12px;
-        gridline-color: {Colors.border_subtle};
+    /* ── Scrollbars ── */
+    QScrollBar:vertical {{ background: transparent; width: 8px; margin: 0; }}
+    QScrollBar::handle:vertical {{ background: {c.border_hover}; min-height: 24px; }}
+    QScrollBar::handle:vertical:hover {{ background: {c.blue}; }}
+    QScrollBar:horizontal {{ background: transparent; height: 8px; margin: 0; }}
+    QScrollBar::handle:horizontal {{ background: {c.border_hover}; min-width: 24px; }}
+    QScrollBar::handle:horizontal:hover {{ background: {c.blue}; }}
+    QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
+    QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
+
+    /* ── Table ── */
+    QTableWidget {{
+        background-color: {c.bg_card};
+        alternate-background-color: {c.bg_row_alt};
+        border: 1px solid {c.border};
+        gridline-color: transparent;
         outline: none;
+        selection-background-color: {c.blue_glow};
+        selection-color: {c.text};
     }}
+    QTableWidget::item {{ padding: 6px 8px; border-bottom: 1px solid {c.border}; }}
+    QTableWidget::item:selected {{ background-color: {c.blue_glow}; }}
+    QHeaderView {{ background: transparent; }}
     QHeaderView::section {{
-        background-color: {Colors.bg_panel};
-        color: {Colors.text_muted};
+        background-color: {c.bg_input};
+        color: {c.blue};
         padding: 8px;
         border: none;
-        border-bottom: 1px solid {Colors.border_subtle};
-        font-weight: bold;
-        text-transform: uppercase;
+        border-bottom: 1px solid {c.blue_deep};
+        font-family: {c.font_mono};
         font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 1px;
     }}
-    QTableWidget::item {{
+    QTableCornerButton::section {{ background: {c.bg_input}; border: none; }}
+
+    /* ── Log ── */
+    QTextEdit {{
+        background-color: {c.bg_input};
+        border: 1px solid {c.border};
+        border-radius: 2px;
         padding: 8px;
-        border-bottom: 1px solid {Colors.border_subtle};
-    }}
-    QTableWidget::item:selected {{
-        background-color: rgba(99, 102, 241, 0.3); /* Translucent Indigo */
-        color: white;
+        font-family: {c.font_mono};
+        font-size: 12px;
     }}
 
-    /* Progress Bar */
-    QProgressBar {{
-        background-color: {Colors.bg_input};
-        border: 1px solid {Colors.border_subtle};
-        border-radius: 10px;
-        text-align: center;
-        color: transparent;
-    }}
-    QProgressBar::chunk {{
-        background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {Colors.accent}, stop:1 #818cf8);
-        border-radius: 9px;
-    }}
-    
-    /* Menu Bar */
-    QMenuBar {{
-        background-color: {Colors.bg_panel};
-        color: {Colors.text_primary};
-        border-bottom: 1px solid {Colors.border_subtle};
-    }}
-    QMenuBar::item:selected {{
-        background-color: {Colors.bg_hover};
-        border-radius: 4px;
-    }}
-    QMenu {{
-        background-color: {Colors.bg_card};
-        border: 1px solid {Colors.border_subtle};
-        border-radius: 6px;
-    }}
-    QMenu::item:selected {{
-        background-color: {Colors.accent};
-    }}
-    
-    /* Status Bar */
+    /* ── Status bar / menus / dialogs ── */
     QStatusBar {{
-        background-color: {Colors.bg_panel};
-        color: {Colors.text_muted};
-        border-top: 1px solid {Colors.border_subtle};
+        background-color: {c.bg};
+        color: {c.text_muted};
+        border-top: 1px solid {c.border};
+        font-family: {c.font_mono};
+        font-size: 11px;
     }}
+    QMenu {{ background: {c.bg_input}; border: 1px solid {c.blue}; }}
+    QMenu::item:selected {{ background: {c.blue_glow}; color: {c.blue_bright}; }}
+    QMessageBox {{ background: {c.bg}; }}
     """

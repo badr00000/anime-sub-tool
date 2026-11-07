@@ -43,13 +43,14 @@ python main.py
 
 ### Packaging into a Portable EXE
 
-To build the standalone `.exe` containing the bundled MKVToolNix binaries, run:
+To build a single self-contained `.exe` (Python, Qt and the bundled MKVToolNix binaries all inside), run:
 
 ```bash
-python build.py
+py -3.11 -m pip install pyinstaller
+py -3.11 build.py
 ```
 
-The output file will be available in the `dist` folder.
+The result is one file: `dist/AnimeSubTool.exe`. Copy it anywhere (for example the Desktop) and double-click it; nothing else needs to be installed. The first launch takes a few seconds because the bundle unpacks itself to a temporary folder.
 
 ## ⚖️ License & Acknowledgements
 - UI Built with [PySide6](https://pypi.org/project/PySide6/).

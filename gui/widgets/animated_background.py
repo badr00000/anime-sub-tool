@@ -1,79 +1,82 @@
 """
-Animated Fluid Background Widget
-Uses pure Qt drawing (QPainter and QRadialGradient) to create a premium, 
-hardware-accelerated fluid background effect without large video files.
+Neon grid background.
+
+Black base, a faint blue perspective-free grid, two slow glows (blue and red)
+drifting in opposite corners, and a thin scan line sweeping down. Pure QPainter,
+30 FPS, no image or video assets.
 """
 
 import math
-from PySide6.QtWidgets import QWidget
-from PySide6.QtGui import QPainter, QRadialGradient, QColor, QBrush, QLinearGradient
-from PySide6.QtCore import QTimer, Qt, QRectF
 
-class FluidNode:
-    def __init__(self, color: QColor, speed: float, radius: float, offset_x: float, offset_y: float):
-        self.color = color
-        self.speed = speed
-        self.base_radius = radius
-        self.offset_x = offset_x
-        self.offset_y = offset_y
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
+from PySide6.QtGui import QBrush, QColor, QLinearGradient, QPainter, QPen, QRadialGradient
+from PySide6.QtWidgets import QWidget
+
+GRID_STEP = 36
+FPS = 30
+
 
 class AnimatedBackground(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        # Timer for 60FPS animation (1000/60 ~= 16ms)
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update)
-        self.timer.start(16)
-        self.time_elapsed = 0.0
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
+        self._t = 0.0
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(1000 // FPS)
 
-        # Define the colorful "fluid" nodes
-        # Colors: Deep Purple, Indigo, Pink, Cyan
-        self.nodes = [
-            FluidNode(QColor(88, 28, 135, 120), speed=0.4, radius=0.8, offset_x=0.0, offset_y=0.0), # Deep Purple
-            FluidNode(QColor(79, 70, 229, 140), speed=0.6, radius=0.7, offset_x=2.0, offset_y=1.5), # Indigo
-            FluidNode(QColor(236, 72, 153, 90), speed=0.5, radius=0.9, offset_x=4.0, offset_y=3.0), # Pink
-            FluidNode(QColor(14, 165, 233, 100), speed=0.3, radius=0.6, offset_x=1.0, offset_y=4.5), # Cyan
-        ]
+    def _tick(self):
+        self._t += 1.0 / FPS
+        self.update()
+
+    def _glow(self, painter: QPainter, cx: float, cy: float, r: float, color: QColor):
+        grad = QRadialGradient(QPointF(cx, cy), r)
+        edge = QColor(color)
+        edge.setAlpha(0)
+        grad.setColorAt(0.0, color)
+        grad.setColorAt(1.0, edge)
+        painter.setBrush(QBrush(grad))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(QRectF(cx - r, cy - r, r * 2, r * 2))
 
     def paintEvent(self, event):
-        self.time_elapsed += 0.016
-        
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        w, h, t = self.width(), self.height(), self._t
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        width = self.width()
-        height = self.height()
-        
-        # 1. Base Background (Deep Navy/Black)
-        base_grad = QLinearGradient(0, 0, width, height)
-        base_grad.setColorAt(0.0, QColor(9, 9, 11))   # Very dark zinc
-        base_grad.setColorAt(1.0, QColor(15, 23, 42)) # Deep slate
-        painter.fillRect(self.rect(), QBrush(base_grad))
-        
-        # 2. Draw moving fluid nodes
-        for node in self.nodes:
-            # Calculate organic movement using sine waves
-            t = self.time_elapsed * node.speed
-            cx = (width / 2) + math.sin(t + node.offset_x) * (width * 0.4)
-            cy = (height / 2) + math.cos(t * 0.8 + node.offset_y) * (height * 0.4)
-            
-            # Breathing radius
-            r = (width + height) * 0.25 * node.base_radius
-            r += math.sin(t * 1.5) * (r * 0.1)
-            
-            # Radial gradient for soft glowing edge (watercolor spread)
-            grad = QRadialGradient(cx, cy, r)
-            
-            center_color = QColor(node.color)
-            edge_color = QColor(node.color)
-            edge_color.setAlpha(0) # Fade to transparent
-            
-            grad.setColorAt(0.0, center_color)
-            grad.setColorAt(1.0, edge_color)
-            
-            painter.setBrush(QBrush(grad))
-            painter.setPen(Qt.NoPen)
-            # Draw a rect large enough to cover the radius
-            painter.drawRect(QRectF(cx - r, cy - r, r * 2, r * 2))
+        p.fillRect(self.rect(), QColor(4, 6, 10))
 
-        painter.end()
+        # Drifting glows: blue top-right, red bottom-left
+        size = (w + h) * 0.32
+        self._glow(p, w * 0.82 + math.sin(t * 0.25) * w * 0.08,
+                   h * 0.18 + math.cos(t * 0.21) * h * 0.08, size, QColor(0, 140, 255, 60))
+        self._glow(p, w * 0.18 + math.cos(t * 0.19) * w * 0.08,
+                   h * 0.86 + math.sin(t * 0.23) * h * 0.06, size * 0.9, QColor(255, 30, 70, 42))
+
+        # Grid
+        p.setPen(QPen(QColor(0, 160, 255, 14), 1))
+        offset = (t * 6) % GRID_STEP
+        x = -offset
+        while x < w:
+            p.drawLine(QPointF(x, 0), QPointF(x, h))
+            x += GRID_STEP
+        y = offset
+        while y < h:
+            p.drawLine(QPointF(0, y), QPointF(w, y))
+            y += GRID_STEP
+
+        # Scan line
+        scan_y = (t * 70) % (h + 200) - 100
+        band = QLinearGradient(0, scan_y - 60, 0, scan_y)
+        band.setColorAt(0.0, QColor(0, 183, 255, 0))
+        band.setColorAt(1.0, QColor(0, 183, 255, 18))
+        p.fillRect(QRectF(0, scan_y - 60, w, 60), QBrush(band))
+        p.setPen(QPen(QColor(0, 200, 255, 50), 1))
+        p.drawLine(QPointF(0, scan_y), QPointF(w, scan_y))
+
+        # Vignette so content in the middle stays readable
+        vignette = QRadialGradient(QPointF(w / 2, h / 2), max(w, h) * 0.75)
+        vignette.setColorAt(0.0, QColor(0, 0, 0, 0))
+        vignette.setColorAt(1.0, QColor(0, 0, 0, 150))
+        p.fillRect(self.rect(), QBrush(vignette))
+        p.end()
