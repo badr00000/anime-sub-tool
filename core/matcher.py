@@ -15,6 +15,40 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Numbers in a filename that are never the episode number: resolutions
+# (1080p, 1920x1080), codecs (x264, h.265), bit depth (10bit), years, CRC hashes.
+_NON_EPISODE_NUMBERS = re.compile(
+    r'\d{3,4}\s*[pi]\b'
+    r'|\d{3,4}\s*x\s*\d{3,4}'
+    r'|[xh]\.?26[45]'
+    r'|\d+\s*-?\s*bits?\b'
+    r'|\b(?:19|20)\d{2}\b'
+    r'|\b[0-9a-f]{8}\b',
+    re.IGNORECASE,
+)
+
+
+def normalize_episode_num(value) -> Optional[str]:
+    """Return a canonical episode number so '01', '1' and '001' compare equal.
+
+    anitopy returns a list for multi-episode files ('01-02'); the first one is used.
+    Non-integer values such as '12.5' are kept as-is.
+    """
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else None
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return str(int(text))
+    try:
+        return format(float(text), "g")
+    except ValueError:
+        return text
+
+
 def extract_episode_info(filepath: Path) -> EpisodeInfo:
     """Parse filename using anitopy first, then regex fallback patterns."""
     filename = filepath.name
@@ -23,9 +57,7 @@ def extract_episode_info(filepath: Path) -> EpisodeInfo:
 
     if HAS_ANITOPY:
         parsed = anitopy.parse(filename)
-        episode_num_str = parsed.get("episode_number")
-        if episode_num_str:
-            episode_num = episode_num_str
+        episode_num = normalize_episode_num(parsed.get("episode_number"))
         series_title = parsed.get("anime_title")
 
     # Fallback to regex patterns if anitopy failed or is not installed
@@ -33,15 +65,18 @@ def extract_episode_info(filepath: Path) -> EpisodeInfo:
         for pattern in EPISODE_PATTERNS:
             match = re.search(pattern, filename, re.IGNORECASE)
             if match:
-                episode_num = match.group(1)
+                episode_num = normalize_episode_num(match.group(1))
                 break
 
     if not episode_num:
-        # Final fallback, look for any standalone number
-        match = re.search(r'(?<!\d)(\d{1,4})(?!\d)', filename)
+        # Final fallback: any standalone number, after removing bracketed tags,
+        # the extension and numbers that are clearly not episodes (1080p, x264, 2004...).
+        cleaned = re.sub(r'\[.*?\]|\(.*?\)', ' ', filepath.stem)
+        cleaned = _NON_EPISODE_NUMBERS.sub(' ', cleaned)
+        match = re.search(r'(?<!\d)(\d{1,4})(?!\d)', cleaned)
         if match:
-            episode_num = match.group(1)
-            
+            episode_num = normalize_episode_num(match.group(1))
+
     # Try to clean up series title if missing
     if not series_title:
         # Basic heuristic: text before episode number or first bracket
@@ -103,23 +138,17 @@ def match_files(videos: list[EpisodeInfo], subtitles: list[EpisodeInfo]) -> tupl
     unmatched_subtitles = [sub for sub in subtitles if not sub.episode_num]
             
     for vid in videos:
-        if not vid.episode_num:
-            matches.append(EpisodeMatch(
-                video=vid,
-                subtitle=None,
-                confidence=MatchConfidence.NO_MATCH,
-                score=0.0
-            ))
-            continue
-            
-        candidates = sub_map.get(vid.episode_num, [])
+        candidates = sub_map.get(vid.episode_num, []) if vid.episode_num else []
         if not candidates:
+            # Still listed in matches (so the track cleanup can run without a new
+            # subtitle), but also reported as unmatched so the UI can warn about it.
             matches.append(EpisodeMatch(
                 video=vid,
                 subtitle=None,
                 confidence=MatchConfidence.NO_MATCH,
                 score=0.0
             ))
+            unmatched_videos.append(vid)
             continue
             
         if len(candidates) == 1:

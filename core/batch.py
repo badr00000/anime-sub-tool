@@ -53,7 +53,13 @@ class BatchProcessor:
             
             try:
                 res = self.processor.process(match, progress_callback=local_progress)
-                _log(f"Completed processing for episode {episode_num}", "INFO" if res.status == ProcessingStatus.COMPLETED else "WARNING")
+                if res.status == ProcessingStatus.FAILED:
+                    _log(f"Failed processing episode {episode_num}: {res.message}", "ERROR")
+                elif res.status == ProcessingStatus.COMPLETED_WITH_WARNINGS:
+                    detail = " | ".join(res.warnings) if res.warnings else res.message
+                    _log(f"Completed episode {episode_num} with warnings: {detail}", "WARNING")
+                else:
+                    _log(f"Completed processing for episode {episode_num}")
                 return res
             except Exception as e:
                 _log(f"Failed processing episode {episode_num}: {str(e)}", "ERROR")

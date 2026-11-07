@@ -133,6 +133,10 @@ class ProcessingOptions:
     edit_new_lang: str = "ara"
     edit_new_name: str = "Arabic"
     isolate_edited_track: bool = False
+    # Shift the added subtitle: positive = show later (delay), negative = show earlier.
+    subtitle_offset_ms: int = 0
+    # "auto" detects (UTF-8 / Windows-1256 / ...), or an explicit charset such as "cp1256".
+    subtitle_charset: str = "auto"
 
 
 @dataclass

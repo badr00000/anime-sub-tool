@@ -102,6 +102,8 @@ class MKVToolsWrapper:
               edit_track_id: Optional[int] = None,
               edit_new_lang: str = "ara",
               edit_new_name: str = "Arabic",
+              sub_offset_ms: int = 0,
+              sub_charset: Optional[str] = None,
               progress_callback: Optional[Callable[[int], None]] = None) -> ProcessingResult:
         """Build and execute mkvmerge command. Parse real-time 'Progress: XX%' from stdout."""
         
@@ -137,41 +139,63 @@ class MKVToolsWrapper:
                 cmd.extend(["--default-track", "0:yes"])
             else:
                 cmd.extend(["--default-track", "0:no"])
+            if sub_offset_ms:
+                cmd.extend(["--sync", f"0:{int(sub_offset_ms)}"])
+            if sub_charset:
+                cmd.extend(["--sub-charset", f"0:{sub_charset}"])
             cmd.append(str(subtitle_path))
 
         logger.info(f"Running mkvmerge: {' '.join(cmd)}")
         
         try:
-            # Use Popen to read stdout line by line
+            # Read stdout line by line. stderr is merged into stdout so it can never
+            # fill its pipe and block mkvmerge, and so its error text is captured.
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
                 encoding='utf-8',
                 errors='replace',
                 creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
             )
-            
+
             progress_pattern = re.compile(r"Progress: (\d+)%")
-            
+            problems: list[str] = []
+
             for line in iter(process.stdout.readline, ''):
                 match = progress_pattern.search(line)
-                if match and progress_callback:
-                    progress_callback(int(match.group(1)))
-                    
+                if match:
+                    if progress_callback:
+                        progress_callback(int(match.group(1)))
+                    continue
+                text = line.strip()
+                if text.startswith(("Error:", "Warning:")):
+                    problems.append(text)
+
             process.wait()
-            
+
             status = ProcessingStatus.COMPLETED
             if process.returncode == MKVMERGE_ERROR:
                 status = ProcessingStatus.FAILED
             elif process.returncode == MKVMERGE_WARNING:
                 status = ProcessingStatus.COMPLETED_WITH_WARNINGS
-                
+
+            errors = [p for p in problems if p.startswith("Error:")]
+            warnings = [p for p in problems if p.startswith("Warning:")]
+            if errors:
+                message = " | ".join(errors)
+                logger.error(f"mkvmerge failed for {video_path}: {message}")
+            else:
+                message = f"mkvmerge exited with code {process.returncode}"
+            for w in warnings:
+                logger.warning(f"mkvmerge: {w}")
+
             return ProcessingResult(
                 status=status,
                 output_path=Path(output_path),
-                message=f"mkvmerge exited with code {process.returncode}"
+                message=message,
+                warnings=warnings
             )
             
         except Exception as e:
@@ -201,7 +225,10 @@ class MKVToolsWrapper:
                 encoding='utf-8',
                 creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
             )
-            return result.returncode in (0, 1) # 0 = ok, 1 = warnings
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to edit properties for {file_path}: {e.stderr}")
+            if result.returncode not in (0, 1):  # 0 = ok, 1 = warnings
+                logger.error(f"Failed to edit properties for {file_path}: {(result.stdout or result.stderr).strip()}")
+                return False
+            return True
+        except OSError as e:
+            logger.error(f"Could not run mkvpropedit for {file_path}: {e}")
             return False

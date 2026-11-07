@@ -108,7 +108,8 @@ EPISODE_PATTERNS = [
     # [Group] Title - 01
     r'[-–]\s*(\d{1,4})(?:v\d+)?\s*(?:\.|$)',
     # S01E01 or S1E1
-    r'[Ss](\d{1,2})[Ee](\d{1,4})',
+    # (season is non-capturing so group(1) is always the episode)
+    r'[Ss]\d{1,2}[Ee](\d{1,4})',
     # EP01 or Ep.01
     r'[Ee][Pp]\.?\s*(\d{1,4})',
     # Episode 01

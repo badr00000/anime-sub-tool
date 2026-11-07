@@ -1,9 +1,16 @@
 from PySide6.QtWidgets import (
     QWidget, QGroupBox, QVBoxLayout, QCheckBox, QHBoxLayout, 
-    QLabel, QSpinBox, QLineEdit, QComboBox, QPushButton, QMessageBox,
+    QLabel, QSpinBox, QDoubleSpinBox, QLineEdit, QComboBox, QPushButton, QMessageBox,
     QScrollArea
 )
 from PySide6.QtCore import Qt
+
+# (label shown in the UI, value stored in ProcessingOptions.subtitle_charset)
+CHARSET_CHOICES = [
+    ("Auto-detect (recommended)", "auto"),
+    ("UTF-8", "utf-8"),
+    ("Windows-1256 (Arabic)", "cp1256"),
+]
 
 try:
     from core.models import ProcessingOptions
@@ -68,7 +75,7 @@ class OptionsPanel(QWidget):
         audio_layout = QHBoxLayout()
         audio_layout.addWidget(QLabel("Keep Audio Langs:"))
         self.audio_input = QLineEdit("jpn")
-        self.audio_input.setPlaceholderText("e.g. jpn, eng (empty to strip all)")
+        self.audio_input.setPlaceholderText("e.g. jpn, eng (empty to keep all)")
         audio_layout.addWidget(self.audio_input, 1)
         
         sub_layout = QHBoxLayout()
@@ -79,6 +86,35 @@ class OptionsPanel(QWidget):
         
         filter_layout.addLayout(audio_layout)
         filter_layout.addLayout(sub_layout)
+
+        # --- New Subtitle Group (timing + encoding) ---
+        subtitle_group = QGroupBox("⏱️ New Subtitle")
+        subtitle_layout = QVBoxLayout(subtitle_group)
+
+        offset_layout = QHBoxLayout()
+        offset_layout.addWidget(QLabel("Shift timing:"))
+        self.offset_spin = QDoubleSpinBox()
+        self.offset_spin.setRange(-600.0, 600.0)
+        self.offset_spin.setDecimals(3)
+        self.offset_spin.setSingleStep(0.1)
+        self.offset_spin.setSuffix(" s")
+        self.offset_spin.setValue(0.0)
+        self.offset_spin.setFixedWidth(110)
+        self.offset_spin.setToolTip("Positive = subtitle shows later (delay). Negative = shows earlier.")
+        offset_layout.addWidget(self.offset_spin)
+        offset_layout.addWidget(QLabel("(+ delay, − earlier)"))
+        offset_layout.addStretch()
+
+        charset_layout = QHBoxLayout()
+        charset_layout.addWidget(QLabel("Encoding:"))
+        self.charset_combo = QComboBox()
+        for label, value in CHARSET_CHOICES:
+            self.charset_combo.addItem(label, value)
+        self.charset_combo.setToolTip("Fixes Arabic text that shows up as garbage symbols.")
+        charset_layout.addWidget(self.charset_combo, 1)
+
+        subtitle_layout.addLayout(offset_layout)
+        subtitle_layout.addLayout(charset_layout)
 
         # --- Track Metadata Editor Group ---
         editor_group = QGroupBox("🔧 Modify Existing Tracks")
@@ -133,6 +169,7 @@ class OptionsPanel(QWidget):
 
         scroll_layout.addWidget(preset_group)
         scroll_layout.addWidget(filter_group)
+        scroll_layout.addWidget(subtitle_group)
         scroll_layout.addWidget(editor_group)
         scroll_layout.addWidget(general_group)
         scroll_layout.addStretch()
@@ -152,6 +189,8 @@ class OptionsPanel(QWidget):
             self.backup_cb.setChecked(False)
             self.dry_run_cb.setChecked(False)
             self.worker_spin.setValue(DEFAULT_PARALLEL_WORKERS)
+            self.offset_spin.setValue(0.0)
+            self._set_charset("auto")
             return
             
         preset = self.config.presets.get(name)
@@ -166,6 +205,12 @@ class OptionsPanel(QWidget):
             self.backup_cb.setChecked(preset.get("backup_originals", False))
             self.dry_run_cb.setChecked(preset.get("dry_run", False))
             self.worker_spin.setValue(preset.get("workers", DEFAULT_PARALLEL_WORKERS))
+            self.offset_spin.setValue(preset.get("subtitle_offset_ms", 0) / 1000.0)
+            self._set_charset(preset.get("subtitle_charset", "auto"))
+
+    def _set_charset(self, value: str):
+        idx = self.charset_combo.findData(value)
+        self.charset_combo.setCurrentIndex(idx if idx >= 0 else 0)
 
     def _save_preset(self):
         from PySide6.QtWidgets import QInputDialog
@@ -182,7 +227,9 @@ class OptionsPanel(QWidget):
                 "create_output_folder": opts.create_output_folder,
                 "backup_originals": opts.backup_originals,
                 "dry_run": opts.dry_run,
-                "workers": opts.workers
+                "workers": opts.workers,
+                "subtitle_offset_ms": opts.subtitle_offset_ms,
+                "subtitle_charset": opts.subtitle_charset
             }
             if not self.config.presets:
                 self.config.presets = {}
@@ -225,6 +272,8 @@ class OptionsPanel(QWidget):
                 edit_target_lang=self.edit_target.text().strip(),
                 edit_new_lang=self.edit_new_lang.text().strip(),
                 edit_new_name=self.edit_new_name.text().strip(),
-                isolate_edited_track=self.isolate_track_cb.isChecked()
+                isolate_edited_track=self.isolate_track_cb.isChecked(),
+                subtitle_offset_ms=round(self.offset_spin.value() * 1000),
+                subtitle_charset=self.charset_combo.currentData() or "auto"
             )
         return None

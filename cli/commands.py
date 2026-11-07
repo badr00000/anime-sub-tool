@@ -138,7 +138,11 @@ def preview(folder, name):
 @click.option('--output', type=click.Path(file_okay=False, dir_okay=True), help='Output directory')
 @click.option('--dry-run', is_flag=True, help='Simulate without making changes')
 @click.option('--yes', '-y', is_flag=True, help='Skip confirmation prompt')
-def process(folder, name, workers, no_backup, output, dry_run, yes):
+@click.option('--offset', default=0.0, type=float, show_default=True,
+              help='Shift the new subtitle in seconds: positive = later (delay), negative = earlier')
+@click.option('--sub-charset', default='auto', show_default=True,
+              help="Subtitle encoding: 'auto', 'utf-8', 'cp1256' (Arabic), or any iconv name")
+def process(folder, name, workers, no_backup, output, dry_run, yes, offset, sub_charset):
     """Process a folder -- embed subtitles and filter audio tracks."""
     try:
         folder_path = validate_folder_path(folder)
@@ -153,6 +157,8 @@ def process(folder, name, workers, no_backup, output, dry_run, yes):
             create_backup=not no_backup,
             output_dir=Path(output) if output else None,
             dry_run=dry_run,
+            subtitle_offset_ms=round(offset * 1000),
+            subtitle_charset=sub_charset,
         )
 
         engine = ProcessingEngine()
