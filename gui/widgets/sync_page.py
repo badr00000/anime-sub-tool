@@ -1,0 +1,562 @@
+"""
+Sync Subtitle page — a standalone tool, separate from season merging.
+
+Play an episode with a subtitle drawn on top, shift the subtitle earlier/later
+while watching (G / H like VLC), then save a shifted copy of the subtitle file.
+The video and the original subtitle are never modified.
+"""
+
+from bisect import bisect_right
+from pathlib import Path
+
+from PySide6.QtCore import QRectF, QSizeF, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut, QTextOption
+from PySide6.QtMultimedia import QAudioOutput, QMediaMetaData, QMediaPlayer
+from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
+from PySide6.QtWidgets import (
+    QComboBox, QDoubleSpinBox, QFileDialog, QFrame, QGraphicsRectItem, QGraphicsScene,
+    QGraphicsTextItem, QGraphicsView, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+    QMessageBox, QPushButton, QSlider, QVBoxLayout, QWidget,
+)
+
+from core import subtitle_file as sf
+from gui.theme import Colors, add_glow, page_header
+
+VIDEO_EXTS = {".mkv", ".mp4", ".webm", ".avi", ".mov", ".m4v"}
+SUB_EXTS = sf.SUPPORTED_EXTENSIONS
+STEP_SMALL = 50       # G / H, same as VLC
+SEEK_STEP = 5000      # ← / →
+
+
+def _clock(ms: int) -> str:
+    s = max(0, int(ms)) // 1000
+    h, rem = divmod(s, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
+
+class VideoView(QGraphicsView):
+    """Video with a subtitle box drawn on top (a plain QVideoWidget cannot be overlaid)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setScene(QGraphicsScene(self))
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setMinimumSize(420, 240)
+
+        self.video_item = QGraphicsVideoItem()
+        self.scene().addItem(self.video_item)
+
+        self._sub_bg = QGraphicsRectItem()
+        self._sub_bg.setBrush(QColor(0, 0, 0, 165))
+        self._sub_bg.setPen(Qt.PenStyle.NoPen)
+        self._sub_bg.setZValue(1)
+        self.scene().addItem(self._sub_bg)
+
+        self._sub = QGraphicsTextItem()
+        self._sub.setDefaultTextColor(QColor("#ffffff"))
+        self._sub.setZValue(2)
+        opt = QTextOption(Qt.AlignmentFlag.AlignHCenter)
+        opt.setWrapMode(QTextOption.WrapMode.WordWrap)
+        self._sub.document().setDefaultTextOption(opt)
+        self.scene().addItem(self._sub)
+
+        self._message = QGraphicsTextItem()
+        self._message.setDefaultTextColor(QColor(Colors.text_muted))
+        self._message.setZValue(3)
+        self.scene().addItem(self._message)
+
+        self._text = ""
+        self.set_message("DROP AN EPISODE AND A SUBTITLE FILE HERE")
+
+    def set_message(self, text: str):
+        self._message.setPlainText(text)
+        self._message.setVisible(bool(text))
+        self._layout()
+
+    def set_subtitle(self, text: str):
+        if text == self._text:
+            return
+        self._text = text
+        self._sub.setPlainText(text)
+        self._layout()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._layout()
+
+    def _layout(self):
+        w, h = self.viewport().width(), self.viewport().height()
+        self.scene().setSceneRect(0, 0, w, h)
+        self.video_item.setSize(QSizeF(w, h))
+        self.video_item.setPos(0, 0)
+
+        mf = QFont("Segoe UI", 11)
+        mf.setBold(True)
+        mf.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2)
+        self._message.setFont(mf)
+        br = self._message.boundingRect()
+        self._message.setPos((w - br.width()) / 2, (h - br.height()) / 2)
+
+        visible = bool(self._text)
+        self._sub.setVisible(visible)
+        self._sub_bg.setVisible(visible)
+        if not visible:
+            return
+        f = QFont("Segoe UI", 10)
+        f.setPixelSize(max(14, int(h * 0.05)))
+        f.setBold(True)
+        self._sub.setFont(f)
+        self._sub.setTextWidth(w * 0.86)
+        br = self._sub.boundingRect()
+        x = (w - br.width()) / 2
+        y = h - br.height() - h * 0.06
+        self._sub.setPos(x, y)
+        self._sub_bg.setRect(QRectF(x - 8, y + 2, br.width() + 16, br.height() - 4))
+
+
+class FileField(QWidget):
+    """Caption + read-only path + BROWSE."""
+
+    browse_clicked = Signal()
+
+    def __init__(self, caption: str, placeholder: str, parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        cap = QLabel(caption)
+        cap.setProperty("role", "fieldLabel")
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        self.edit = QLineEdit()
+        self.edit.setReadOnly(True)
+        self.edit.setPlaceholderText(placeholder)
+        btn = QPushButton("BROWSE")
+        btn.setFixedWidth(96)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.clicked.connect(self.browse_clicked.emit)
+        row.addWidget(self.edit, 1)
+        row.addWidget(btn)
+        lay.addWidget(cap)
+        lay.addLayout(row)
+
+
+class SyncPage(QWidget):
+    status_message = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self._sub: sf.SubtitleFile | None = None
+        self._starts: list[int] = []
+        self._cues: list[sf.Cue] = []
+        self._offset = 0
+        self._saved_offset = 0
+        self._seeking = False
+
+        # ── player ──
+        self.player = QMediaPlayer(self)
+        self.audio = QAudioOutput(self)
+        self.audio.setVolume(0.8)
+        self.player.setAudioOutput(self.audio)
+        self.view = VideoView()
+        self.player.setVideoOutput(self.view.video_item)
+        self.player.durationChanged.connect(self._on_duration)
+        self.player.mediaStatusChanged.connect(self._on_media_status)
+        self.player.errorOccurred.connect(self._on_error)
+        self.player.playbackStateChanged.connect(self._on_state)
+        self.player.tracksChanged.connect(self._fill_audio_tracks)
+
+        self._tick = QTimer(self)
+        self._tick.setInterval(40)
+        self._tick.timeout.connect(self._refresh)
+        self._tick.start()
+
+        # ── layout ──
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(14)
+        root.addWidget(page_header(
+            "SYNC SUBTITLE",
+            "Watch the episode, nudge the subtitle until it matches the voice, then save a synced copy.",
+            Colors.red))
+
+        files = QHBoxLayout()
+        files.setSpacing(16)
+        self.video_field = FileField("EPISODE", "Pick or drop a video file…")
+        self.video_field.browse_clicked.connect(self._browse_video)
+        self.sub_field = FileField("SUBTITLE", "Pick or drop a .srt / .ass file…")
+        self.sub_field.browse_clicked.connect(self._browse_subtitle)
+        files.addWidget(self.video_field, 1)
+        files.addWidget(self.sub_field, 1)
+        root.addLayout(files)
+
+        body = QHBoxLayout()
+        body.setSpacing(18)
+        root.addLayout(body, 1)
+
+        # Left: video + transport
+        left = QVBoxLayout()
+        left.setSpacing(8)
+        left.addWidget(self.view, 1)
+
+        transport = QHBoxLayout()
+        transport.setSpacing(10)
+        self.play_btn = QPushButton("▶")
+        self.play_btn.setObjectName("primaryButton")
+        self.play_btn.setFixedSize(46, 34)
+        self.play_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.play_btn.clicked.connect(self.toggle_play)
+        self.seek = QSlider(Qt.Orientation.Horizontal)
+        self.seek.setRange(0, 0)
+        self.seek.sliderPressed.connect(lambda: setattr(self, "_seeking", True))
+        self.seek.sliderReleased.connect(self._seek_released)
+        self.time_lbl = QLabel("00:00 / 00:00")
+        self.time_lbl.setProperty("role", "fieldLabel")
+        self.time_lbl.setStyleSheet(f"color: {Colors.text_secondary};")
+        self.audio_combo = QComboBox()
+        self.audio_combo.setMinimumWidth(150)
+        self.audio_combo.setToolTip("Audio track")
+        self.audio_combo.currentIndexChanged.connect(self._on_audio_track)
+        self.volume = QSlider(Qt.Orientation.Horizontal)
+        self.volume.setRange(0, 100)
+        self.volume.setValue(80)
+        self.volume.setFixedWidth(80)
+        self.volume.setToolTip("Volume")
+        self.volume.valueChanged.connect(lambda v: self.audio.setVolume(v / 100))
+        transport.addWidget(self.play_btn)
+        transport.addWidget(self.seek, 1)
+        transport.addWidget(self.time_lbl)
+        transport.addWidget(self.audio_combo)
+        transport.addWidget(self.volume)
+        left.addLayout(transport)
+        body.addLayout(left, 1)
+
+        # Right: sync controls
+        panel = QFrame()
+        panel.setObjectName("card")
+        panel.setFixedWidth(300)
+        pl = QVBoxLayout(panel)
+        pl.setContentsMargins(18, 16, 18, 16)
+        pl.setSpacing(10)
+
+        cap = QLabel("SUBTITLE OFFSET")
+        cap.setProperty("role", "fieldLabel")
+        self.offset_lbl = QLabel()
+        self.offset_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.offset_hint = QLabel()
+        self.offset_hint.setProperty("role", "hint")
+        self.offset_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        grid = QGridLayout()
+        grid.setSpacing(6)
+        for col, (label, ms, tip) in enumerate([("−1s", -1000, "1 second earlier"),
+                                                ("−100", -100, "100 ms earlier"),
+                                                ("−50", -STEP_SMALL, "50 ms earlier  (G)")]):
+            grid.addWidget(self._nudge(label, ms, tip), 0, col)
+        for col, (label, ms, tip) in enumerate([("+50", STEP_SMALL, "50 ms later  (H)"),
+                                                ("+100", 100, "100 ms later"),
+                                                ("+1s", 1000, "1 second later")]):
+            grid.addWidget(self._nudge(label, ms, tip), 1, col)
+
+        exact_cap = QLabel("EXACT VALUE (SECONDS)")
+        exact_cap.setProperty("role", "fieldLabel")
+        exact_cap.setStyleSheet(f"color: {Colors.text_muted}; font-size: 10px;")
+        exact_row = QHBoxLayout()
+        self.exact = QDoubleSpinBox()
+        self.exact.setRange(-3600.0, 3600.0)
+        self.exact.setDecimals(3)
+        self.exact.setSingleStep(0.05)
+        self.exact.setSuffix(" s")
+        self.exact.valueChanged.connect(lambda v: self.set_offset(round(v * 1000), from_spin=True))
+        reset = QPushButton("RESET")
+        reset.setFixedWidth(86)
+        reset.clicked.connect(lambda: self.set_offset(0))
+        exact_row.addWidget(self.exact, 1)
+        exact_row.addWidget(reset)
+
+        line_cap = QLabel("ON SCREEN NOW")
+        line_cap.setProperty("role", "fieldLabel")
+        line_cap.setStyleSheet(f"color: {Colors.text_muted}; font-size: 10px;")
+        self.line_lbl = QLabel("—")
+        self.line_lbl.setWordWrap(True)
+        self.line_lbl.setMinimumHeight(44)
+        self.line_lbl.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.line_lbl.setStyleSheet(f"color: {Colors.text}; background: {Colors.bg_input};"
+                                    f" border: 1px solid {Colors.border}; padding: 8px;")
+
+        keys = QLabel("G earlier · H later\nSPACE play/pause · ←/→ 5s")
+        keys.setProperty("role", "fieldLabel")
+        keys.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        keys.setStyleSheet(f"color: {Colors.text_muted}; font-size: 10px; letter-spacing: 1px;")
+
+        self.save_btn = QPushButton("SAVE SYNCED COPY")
+        self.save_btn.setObjectName("primaryButton")
+        self.save_btn.setFixedHeight(46)
+        self.save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.save_btn.clicked.connect(self.save)
+        add_glow(self.save_btn, Colors.blue, 24)
+        self.save_as_btn = QPushButton("SAVE AS…")
+        self.save_as_btn.clicked.connect(self.save_as)
+        self.saved_lbl = QLabel("")
+        self.saved_lbl.setWordWrap(True)
+        self.saved_lbl.setProperty("role", "ok")
+
+        pl.addWidget(cap)
+        pl.addWidget(self.offset_lbl)
+        pl.addWidget(self.offset_hint)
+        pl.addLayout(grid)
+        pl.addWidget(exact_cap)
+        pl.addLayout(exact_row)
+        pl.addWidget(line_cap)
+        pl.addWidget(self.line_lbl)
+        pl.addStretch(1)
+        pl.addWidget(keys)
+        pl.addWidget(self.save_btn)
+        pl.addWidget(self.save_as_btn)
+        pl.addWidget(self.saved_lbl)
+        body.addWidget(panel)
+
+        # ── keyboard (only while this page is shown) ──
+        for key, slot in ((Qt.Key.Key_G, lambda: self.nudge(-STEP_SMALL)),
+                          (Qt.Key.Key_H, lambda: self.nudge(STEP_SMALL)),
+                          (Qt.Key.Key_Space, self.toggle_play),
+                          (Qt.Key.Key_Left, lambda: self.seek_by(-SEEK_STEP)),
+                          (Qt.Key.Key_Right, lambda: self.seek_by(SEEK_STEP))):
+            sc = QShortcut(QKeySequence(key), self)
+            sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            sc.activated.connect(slot)
+
+        self.set_offset(0)
+        self._update_buttons()
+
+    # ── helpers ──
+    def _nudge(self, label: str, ms: int, tip: str) -> QPushButton:
+        b = QPushButton(label)
+        b.setObjectName("nudgeButton")
+        b.setToolTip(tip)
+        b.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # keep Space for play/pause
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.clicked.connect(lambda: self.nudge(ms))
+        return b
+
+    def _update_buttons(self):
+        has_sub = self._sub is not None
+        self.save_btn.setEnabled(has_sub)
+        self.save_as_btn.setEnabled(has_sub)
+        self.play_btn.setEnabled(bool(self.player.source().toString()))
+
+    # ── offset ──
+    def nudge(self, ms: int):
+        self.set_offset(self._offset + ms)
+
+    def set_offset(self, ms: int, from_spin: bool = False):
+        self._offset = int(ms)
+        color = Colors.blue_bright if ms > 0 else Colors.red_bright if ms < 0 else Colors.text
+        self.offset_lbl.setText(sf.format_offset(self._offset))
+        self.offset_lbl.setStyleSheet(f"font-size: 30px; font-weight: 900; color: {color};"
+                                      " background: transparent;")
+        self.offset_hint.setText("subtitle shows LATER" if ms > 0 else
+                                 "subtitle shows EARLIER" if ms < 0 else "original timing")
+        if not from_spin:
+            self.exact.blockSignals(True)
+            self.exact.setValue(self._offset / 1000)
+            self.exact.blockSignals(False)
+        if self._offset != self._saved_offset:
+            self.saved_lbl.setText("")
+        self._refresh()
+
+    # ── loading ──
+    def load_video(self, path: str):
+        p = Path(path)
+        self.player.stop()
+        self.player.setSource(QUrl.fromLocalFile(str(p)))
+        self.video_field.edit.setText(str(p))
+        self.video_field.edit.setToolTip(str(p))
+        self.view.set_message("LOADING…")
+        if self._sub is None:
+            self._auto_pick_subtitle(p)
+        self._update_buttons()
+
+    def _auto_pick_subtitle(self, video: Path):
+        """Same folder: a subtitle with the same name, else the only one with the same episode number."""
+        same = [video.with_suffix(ext) for ext in (".srt", ".ass", ".ssa")]
+        for cand in same:
+            if cand.exists():
+                self.load_subtitle(str(cand))
+                return
+        try:
+            from core.matcher import extract_episode_info
+            ep = extract_episode_info(video).episode_num
+            if not ep:
+                return
+            hits = [f for f in video.parent.iterdir()
+                    if f.suffix.lower() in SUB_EXTS and extract_episode_info(f).episode_num == ep]
+            if len(hits) == 1:
+                self.load_subtitle(str(hits[0]))
+        except OSError:
+            pass
+
+    def load_subtitle(self, path: str):
+        try:
+            sub = sf.load(path)
+        except (OSError, ValueError) as e:
+            QMessageBox.warning(self, "Subtitle", f"Could not read this subtitle:\n\n{e}")
+            return
+        self._sub = sub
+        self._cues = sorted(sub.cues, key=lambda c: c.start_ms)
+        self._starts = [c.start_ms for c in self._cues]
+        self._saved_offset = 0
+        self.sub_field.edit.setText(path)
+        self.sub_field.edit.setToolTip(f"{path}\n{len(self._cues)} lines · encoding {sub.encoding}")
+        self.saved_lbl.setText("")
+        self.set_offset(0)
+        self.status_message.emit(f"Loaded {len(self._cues)} subtitle lines ({sub.encoding})")
+        self._update_buttons()
+
+    def _browse_video(self):
+        exts = " ".join(f"*{e}" for e in sorted(VIDEO_EXTS))
+        path, _ = QFileDialog.getOpenFileName(self, "Choose episode", self._start_dir(),
+                                              f"Video ({exts})")
+        if path:
+            self.load_video(path)
+
+    def _browse_subtitle(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Choose subtitle", self._start_dir(),
+                                              "Subtitles (*.srt *.ass *.ssa)")
+        if path:
+            self.load_subtitle(path)
+
+    def _start_dir(self) -> str:
+        for text in (self.video_field.edit.text(), self.sub_field.edit.text()):
+            if text:
+                return str(Path(text).parent)
+        return ""
+
+    # ── drag & drop ──
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        for url in event.mimeData().urls():
+            p = Path(url.toLocalFile())
+            if p.suffix.lower() in SUB_EXTS:
+                self.load_subtitle(str(p))
+            elif p.suffix.lower() in VIDEO_EXTS:
+                self.load_video(str(p))
+
+    # ── playback ──
+    def toggle_play(self):
+        if not self.player.source().toString():
+            return
+        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.player.pause()
+        else:
+            self.player.play()
+
+    def seek_by(self, ms: int):
+        self.player.setPosition(max(0, self.player.position() + ms))
+
+    def _seek_released(self):
+        self._seeking = False
+        self.player.setPosition(self.seek.value())
+
+    def _on_duration(self, ms: int):
+        self.seek.setRange(0, ms)
+
+    def _on_state(self, state):
+        self.play_btn.setText("❚❚" if state == QMediaPlayer.PlaybackState.PlayingState else "▶")
+
+    def _on_media_status(self, status):
+        if status in (QMediaPlayer.MediaStatus.LoadedMedia, QMediaPlayer.MediaStatus.BufferedMedia):
+            self.view.set_message("")
+            # Hide subtitles embedded in the video so only the one being synced is shown
+            self.player.setActiveSubtitleTrack(-1)
+            if status == QMediaPlayer.MediaStatus.LoadedMedia and \
+                    self.player.playbackState() == QMediaPlayer.PlaybackState.StoppedState:
+                self.player.play()
+                self.player.pause()  # show the first frame
+        elif status == QMediaPlayer.MediaStatus.InvalidMedia:
+            self.view.set_message("THIS VIDEO CAN'T BE PLAYED HERE")
+
+    def _on_error(self, error, message: str):
+        if error != QMediaPlayer.Error.NoError:
+            self.view.set_message("THIS VIDEO CAN'T BE PLAYED HERE\n(unsupported codec?)")
+            self.status_message.emit(f"Video error: {message}")
+
+    def _fill_audio_tracks(self):
+        tracks = self.player.audioTracks()
+        self.audio_combo.blockSignals(True)
+        self.audio_combo.clear()
+        preferred = 0
+        for i, meta in enumerate(tracks):
+            lang = meta.value(QMediaMetaData.Key.Language)
+            lang_name = lang.name if hasattr(lang, "name") else str(lang or "")
+            title = meta.stringValue(QMediaMetaData.Key.Title)
+            label = " · ".join(x for x in (lang_name.replace("AnyLanguage", ""), title) if x) or f"Track {i + 1}"
+            self.audio_combo.addItem(label, i)
+            if "Japanese" in lang_name and preferred == 0:
+                preferred = i
+        self.audio_combo.setCurrentIndex(preferred if tracks else -1)
+        self.audio_combo.blockSignals(False)
+        self.audio_combo.setVisible(len(tracks) > 1)
+        if tracks:
+            self.player.setActiveAudioTrack(preferred)
+        self.player.setActiveSubtitleTrack(-1)
+
+    def _on_audio_track(self, idx: int):
+        if idx >= 0:
+            self.player.setActiveAudioTrack(self.audio_combo.itemData(idx))
+
+    def _refresh(self):
+        pos = self.player.position()
+        if not self._seeking:
+            self.seek.blockSignals(True)
+            self.seek.setValue(pos)
+            self.seek.blockSignals(False)
+        self.time_lbl.setText(f"{_clock(pos)} / {_clock(self.player.duration())}")
+
+        text = ""
+        if self._cues:
+            t = pos - self._offset            # time on the subtitle's own clock
+            i = bisect_right(self._starts, t)
+            active = [c.text for c in self._cues[max(0, i - 30):i] if c.end_ms > t]
+            text = "\n".join(active)
+        self.view.set_subtitle(text)
+        self.line_lbl.setText(text or "—")
+
+    # ── saving ──
+    def save(self):
+        self._write(None)
+
+    def save_as(self):
+        if not self._sub:
+            return
+        default = str(sf.default_output_path(self._sub.path))
+        path, _ = QFileDialog.getSaveFileName(self, "Save synced subtitle", default,
+                                              f"Subtitle (*{self._sub.path.suffix})")
+        if path:
+            self._write(path)
+
+    def _write(self, target):
+        if not self._sub:
+            return
+        try:
+            out = sf.save_shifted(self._sub, self._offset, target)
+        except OSError as e:
+            QMessageBox.critical(self, "Save failed", f"Could not save the subtitle:\n\n{e}")
+            return
+        self._saved_offset = self._offset
+        self.saved_lbl.setText(f"✓ Saved {out.name}  ({sf.format_offset(self._offset)})")
+        self.status_message.emit(f"Saved synced subtitle: {out}")
+
+    def pause(self):
+        """Called when the user leaves this page."""
+        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.player.pause()
+
+    def shutdown(self):
+        self.player.stop()

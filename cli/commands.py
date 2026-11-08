@@ -218,5 +218,25 @@ def process(folder, name, workers, no_backup, output, dry_run, yes, offset, sub_
         sys.exit(1)
 
 
+@cli.command()
+@click.argument('subtitle', type=click.Path(exists=True, dir_okay=False))
+@click.option('--offset', required=True, type=float,
+              help='Seconds: positive = show later (delay), negative = show earlier')
+@click.option('--output', '-o', type=click.Path(dir_okay=False),
+              help="Output file (default: '<name>.synced.<ext>' next to the original)")
+def shift(subtitle, offset, output):
+    """Shift every line of a .srt/.ass subtitle and save a synced copy."""
+    from core import subtitle_file as sf
+    try:
+        sub = sf.load(subtitle)
+        offset_ms = round(offset * 1000)
+        out = sf.save_shifted(sub, offset_ms, output)
+        safe_echo(f"[OK] {len(sub.cues)} lines shifted {sf.format_offset(offset_ms)} -> "
+                  f"{click.style(str(out), fg='cyan')}")
+    except (OSError, ValueError) as e:
+        safe_echo(click.style(f"[ERROR] {e}", fg='red'))
+        sys.exit(1)
+
+
 if __name__ == '__main__':
     cli()

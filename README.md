@@ -13,6 +13,7 @@ A powerful, smart, and fully automated batch tool designed to seamlessly merge M
 - **🎛️ Advanced Custom Filters:** 
   - Keep specific audio tracks (e.g. `jpn, eng`).
   - Strip or keep specific subtitle tracks.
+- **⏱️ Sync Subtitle (standalone tool):** Play an episode with a `.srt`/`.ass` subtitle on top, nudge it earlier/later while watching (`G` / `H`, like VLC), then save a shifted copy (`name.synced.srt`). The original files are never modified. Also available from the CLI: `python main.py shift file.srt --offset 1.5`.
 - **💾 Configuration Presets:** Save your favorite filters, thread counts, and configurations as profiles to load them with a single click.
 - **📦 Fully Portable:** No need to install `MKVToolNix`! The required binaries (`mkvmerge` and `mkvpropedit`) are bundled internally. Just run the `.exe` anywhere.
 

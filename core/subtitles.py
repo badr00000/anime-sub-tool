@@ -20,11 +20,17 @@ CHARSET_AUTO = "auto"
 
 # How much of the file must be Arabic letters (after decoding as cp1256)
 # before we trust that it really is an Arabic Windows-1256 file.
-_ARABIC_LETTER_RATIO = 0.3
+_ARABIC_LETTER_RATIO = 0.6
 
 
 def _arabic_ratio(text: str) -> float:
-    letters = [c for c in text if c.isalpha()]
+    """Share of Arabic among the NON-ASCII letters.
+
+    ASCII is ignored on purpose: SRT/ASS files are full of English tags, style
+    names and romaji that would otherwise hide a fully Arabic file. A Western
+    cp1252 file decoded as cp1256 gives é/ü/à (not Arabic), so it stays low.
+    """
+    letters = [c for c in text if c.isalpha() and ord(c) > 127]
     if not letters:
         return 0.0
     arabic = sum(1 for c in letters if "؀" <= c <= "ۿ")

@@ -62,6 +62,28 @@ def add_glow(widget: QWidget, color: str = Colors.blue, radius: int = 22) -> Non
     widget.setGraphicsEffect(effect)
 
 
+def page_header(title: str, subtitle: str, accent: str = Colors.blue) -> QWidget:
+    """Accent bar + big spaced title + one-line subtitle, used at the top of every page."""
+    from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
+
+    box = QWidget()
+    lay = QVBoxLayout(box)
+    lay.setContentsMargins(0, 0, 0, 6)
+    lay.setSpacing(4)
+    bar = QFrame()
+    bar.setFixedSize(46, 3)
+    bar.setStyleSheet(f"background: {accent}; border: none;")
+    t = QLabel(title)
+    t.setProperty("role", "pageTitle")
+    st = QLabel(subtitle)
+    st.setProperty("role", "pageSubtitle")
+    lay.addWidget(bar)
+    lay.addSpacing(6)
+    lay.addWidget(t)
+    lay.addWidget(st)
+    return box
+
+
 def get_stylesheet() -> str:
     c = Colors
     return f"""
@@ -271,9 +293,43 @@ def get_stylesheet() -> str:
         background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
             stop:0 rgba(0, 183, 255, 0.22), stop:1 rgba(0, 183, 255, 0));
     }}
-    QPushButton#navButton[state="done"] {{
+    QPushButton#navButton[state="done"], QPushButton#navButton[state="paused"] {{
         color: {c.text_secondary};
     }}
+    /* Sidebar section switch (MERGE SEASON / SYNC SUBTITLE) */
+    QPushButton#modeButton {{
+        text-align: left;
+        border: none;
+        padding: 10px 18px;
+        margin: 0 10px;
+        color: {c.text_muted};
+        font-family: {c.font_mono};
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 2px;
+        background: transparent;
+    }}
+    QPushButton#modeButton:hover {{ color: {c.text}; background: {c.bg_hover}; }}
+    QPushButton#modeButton[active="true"] {{
+        color: {c.red_bright};
+        background: {c.red_glow};
+        border-left: 2px solid {c.red};
+    }}
+    /* Small square nudge buttons on the sync page */
+    QPushButton#nudgeButton {{
+        padding: 8px 4px;
+        font-family: {c.font_mono};
+        font-size: 12px;
+        letter-spacing: 0;
+    }}
+    QSlider::groove:horizontal {{ height: 4px; background: {c.border_hover}; }}
+    QSlider::sub-page:horizontal {{
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {c.blue_deep}, stop:1 {c.blue});
+    }}
+    QSlider::handle:horizontal {{
+        width: 12px; margin: -5px 0; background: {c.blue_bright}; border: 1px solid {c.blue};
+    }}
+    QGraphicsView {{ background: #000000; border: 1px solid {c.border}; }}
     QPushButton#linkButton {{
         border: none;
         padding: 6px 4px;

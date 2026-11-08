@@ -15,8 +15,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QThread, Signal, Qt, QTimer
 from PySide6.QtGui import QAction, QFont
 
-from gui.theme import Colors, add_glow, get_stylesheet
+from gui.theme import Colors, add_glow, get_stylesheet, page_header
 from gui.widgets.sidebar import Sidebar
+from gui.widgets.sync_page import SyncPage
 from gui.widgets.folder_picker import FolderPicker
 from gui.widgets.series_input import SeriesInput
 from gui.widgets.preview_panel import PreviewPanel
@@ -156,24 +157,7 @@ class AnimeSubToolApp(QMainWindow):
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Ready — Select a folder to begin")
 
-    @staticmethod
-    def _page_header(title: str, subtitle: str, accent: str = Colors.blue) -> QWidget:
-        box = QWidget()
-        lay = QVBoxLayout(box)
-        lay.setContentsMargins(0, 0, 0, 6)
-        lay.setSpacing(4)
-        bar = QFrame()
-        bar.setFixedSize(46, 3)
-        bar.setStyleSheet(f"background: {accent}; border: none;")
-        t = QLabel(title)
-        t.setProperty("role", "pageTitle")
-        st = QLabel(subtitle)
-        st.setProperty("role", "pageSubtitle")
-        lay.addWidget(bar)
-        lay.addSpacing(6)
-        lay.addWidget(t)
-        lay.addWidget(st)
-        return box
+    _page_header = staticmethod(page_header)
 
     def _setup_ui(self):
         from gui.widgets.animated_background import AnimatedBackground
@@ -187,6 +171,8 @@ class AnimeSubToolApp(QMainWindow):
         self.sidebar = Sidebar(APP_VERSION)
         self.sidebar.settings_requested.connect(self._show_settings)
         self.sidebar.about_requested.connect(self._show_about)
+        self.sidebar.mode_requested.connect(self._switch_mode)
+        self._merge_step = 0
         root.addWidget(self.sidebar)
 
         content = QWidget()
@@ -295,11 +281,42 @@ class AnimeSubToolApp(QMainWindow):
 
         for page in (step1, step2, step3, step4):
             self.stack.addWidget(page)
+
+        # ─── Standalone tool: Sync Subtitle (index 4, not part of the merge steps) ───
+        self.sync_page = SyncPage()
+        self.sync_page.status_message.connect(self.status_bar_message)
+        self.stack.addWidget(self.sync_page)
+
         main_layout.addWidget(self.stack, 1)
 
+    SYNC_PAGE = 4
+
+    def status_bar_message(self, text: str):
+        if hasattr(self, "status_bar"):
+            self.status_bar.showMessage(text, 8000)
+
+    def _in_sync_mode(self) -> bool:
+        return self.stack.currentIndex() == self.SYNC_PAGE
+
+    def _switch_mode(self, mode: str):
+        if mode == "sync":
+            self.stack.setCurrentIndex(self.SYNC_PAGE)
+        else:
+            self.sync_page.pause()
+            self.stack.setCurrentIndex(self._merge_step)
+        self.sidebar.set_mode(mode)
+
     def _go_to_step(self, step: int):
-        self.stack.setCurrentIndex(step)
+        # Merge steps keep advancing in the background while the sync tool is open
+        # (e.g. a batch finishes); only switch the view when the merge tool is showing.
+        self._merge_step = step
         self.sidebar.set_step(step)
+        if not self._in_sync_mode():
+            self.stack.setCurrentIndex(step)
+
+    def closeEvent(self, event):
+        self.sync_page.shutdown()
+        super().closeEvent(event)
 
     def _cancel_processing(self):
         if self._process_worker is not None and self._process_worker.isRunning():
@@ -358,7 +375,7 @@ class AnimeSubToolApp(QMainWindow):
 
     def _run_scan(self):
         # Prevent watch folder from interrupting an active processing session
-        if self.stack.currentIndex() >= 2:
+        if self._merge_step >= 2:
             return
 
         path = self.folder_picker.get_path()
