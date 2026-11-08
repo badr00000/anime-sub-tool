@@ -142,7 +142,9 @@ def preview(folder, name):
               help='Shift the new subtitle in seconds: positive = later (delay), negative = earlier')
 @click.option('--sub-charset', default='auto', show_default=True,
               help="Subtitle encoding: 'auto', 'utf-8', 'cp1256' (Arabic), or any iconv name")
-def process(folder, name, workers, no_backup, output, dry_run, yes, offset, sub_charset):
+@click.option('--keep-original-subs', is_flag=True,
+              help='Keep the subtitles already inside each episode (default: remove them)')
+def process(folder, name, workers, no_backup, output, dry_run, yes, offset, sub_charset, keep_original_subs):
     """Process a folder -- embed subtitles and filter audio tracks."""
     try:
         folder_path = validate_folder_path(folder)
@@ -159,6 +161,7 @@ def process(folder, name, workers, no_backup, output, dry_run, yes, offset, sub_
             dry_run=dry_run,
             subtitle_offset_ms=round(offset * 1000),
             subtitle_charset=sub_charset,
+            remove_existing_subs=not keep_original_subs,
         )
 
         engine = ProcessingEngine()

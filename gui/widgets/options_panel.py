@@ -98,9 +98,19 @@ class OptionsPanel(QWidget):
         
         self.audio_input = MultiLanguageCombo("All audio tracks (nothing ticked)")
         self.audio_input.set_values(["jpn"])
-        self.sub_input = MultiLanguageCombo("None — remove all original subtitles")
         filter_layout.addWidget(self._field("KEEP AUDIO", self.audio_input))
-        filter_layout.addWidget(self._field("KEEP ORIGINAL SUBS", self.sub_input))
+
+        # Original subtitles inside the episode: remove them (default) or keep them all
+        self.remove_subs_cb = QCheckBox("Remove existing subtitles from the episode")
+        self.remove_subs_cb.setChecked(True)
+        self.remove_subs_cb.setToolTip("Unticked: every subtitle already in the episode is kept,\n"
+                                       "and the new subtitle is added next to them.")
+        self.sub_input = MultiLanguageCombo("No exceptions — remove them all")
+        self._sub_except_field = self._field("EXCEPT THESE LANGUAGES", self.sub_input)
+        self.remove_subs_cb.toggled.connect(self._sub_except_field.setEnabled)
+        filter_layout.addSpacing(4)
+        filter_layout.addWidget(self.remove_subs_cb)
+        filter_layout.addWidget(self._sub_except_field)
 
         # --- New Subtitle Group (timing + encoding) ---
         subtitle_group = QGroupBox("NEW SUBTITLE")
@@ -195,6 +205,7 @@ class OptionsPanel(QWidget):
     def _load_preset(self, name: str):
         if not self.config or name == "Default":
             self.audio_input.set_values(["jpn"])
+            self.remove_subs_cb.setChecked(True)
             self.sub_input.set_values([])
             self.edit_target.set_value("")
             self.edit_new_lang.set_value("ara")
@@ -213,6 +224,7 @@ class OptionsPanel(QWidget):
         preset = self.config.presets.get(name)
         if preset:
             self.audio_input.set_values(preset.get("keep_audio_langs", ["jpn"]))
+            self.remove_subs_cb.setChecked(preset.get("remove_existing_subs", True))
             self.sub_input.set_values(preset.get("keep_sub_langs", []))
             self.edit_target.set_value(preset.get("edit_target_lang", ""))
             self.edit_new_lang.set_value(preset.get("edit_new_lang", "ara"))
@@ -238,6 +250,7 @@ class OptionsPanel(QWidget):
             preset_dict = {
                 "keep_audio_langs": opts.keep_audio_langs,
                 "keep_sub_langs": opts.keep_sub_langs,
+                "remove_existing_subs": opts.remove_existing_subs,
                 "edit_target_lang": opts.edit_target_lang,
                 "edit_new_lang": opts.edit_new_lang,
                 "edit_new_name": opts.edit_new_name,
@@ -289,6 +302,7 @@ class OptionsPanel(QWidget):
                 workers=self.worker_spin.value(),
                 keep_audio_langs=audio_langs,
                 keep_sub_langs=sub_langs,
+                remove_existing_subs=self.remove_subs_cb.isChecked(),
                 edit_target_lang=self.edit_target.value(),
                 edit_new_lang=self.edit_new_lang.value() or "ara",
                 edit_new_name=self.edit_new_name.text().strip(),

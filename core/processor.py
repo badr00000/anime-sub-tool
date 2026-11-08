@@ -62,17 +62,20 @@ class EpisodeProcessor:
                     edited_track_id = t.id
                     break  # Only edit the first matching track
                     
-        if self.options.keep_sub_langs:
+        # None = keep every original subtitle (mkvmerge default); a list = keep only those ids
+        if not self.options.remove_existing_subs:
+            sub_track_ids = None
+        elif self.options.keep_sub_langs:
             keep_subs = {normalize(c) for c in self.options.keep_sub_langs}
             sub_track_ids = [t.id for t in sub_tracks if normalize(t.language) in keep_subs]
         else:
-            sub_track_ids = [] # strip all original subs by default
-            
+            sub_track_ids = []  # remove all original subtitles
+
         if edited_track_id is not None:
             if self.options.isolate_edited_track:
-                sub_track_ids = [edited_track_id] # Clear all others
-            elif edited_track_id not in sub_track_ids:
-                sub_track_ids.append(edited_track_id) # Ensure it's kept
+                sub_track_ids = [edited_track_id]  # clear all others
+            elif sub_track_ids is not None and edited_track_id not in sub_track_ids:
+                sub_track_ids.append(edited_track_id)  # ensure it's kept
 
         # 4. Build Output Path (the folder is only created now, when we really write)
         output_path = self._output_path(video_path)
@@ -141,12 +144,14 @@ class EpisodeProcessor:
                 target=f"Convert '{self.options.edit_target_lang}' to '{self.options.edit_new_lang}'{iso_text}"
             ))
 
-        if self.options.keep_sub_langs and not self.options.isolate_edited_track:
-            operations.append(PreviewOperation(action="Filter Subtitles", target=f"Keep {', '.join(self.options.keep_sub_langs)}"))
-        elif self.options.isolate_edited_track:
+        if self.options.isolate_edited_track and self.options.edit_target_lang:
             operations.append(PreviewOperation(action="Filter Subtitles", target="Keep ONLY the edited track"))
+        elif not self.options.remove_existing_subs:
+            operations.append(PreviewOperation(action="Keep Subtitles", target="All existing original subtitles"))
+        elif self.options.keep_sub_langs:
+            operations.append(PreviewOperation(action="Remove Subtitles", target=f"All original subs except {', '.join(self.options.keep_sub_langs)}"))
         else:
-            operations.append(PreviewOperation(action="Strip Subtitles", target="All existing original subs (except edited)"))
+            operations.append(PreviewOperation(action="Remove Subtitles", target="All existing original subs (except edited)"))
             
         if self.options.keep_audio_langs:
             operations.append(PreviewOperation(action="Filter Audio", target=f"Keep {', '.join(self.options.keep_audio_langs)} (if found)"))

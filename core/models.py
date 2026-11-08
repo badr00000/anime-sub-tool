@@ -128,6 +128,9 @@ class ProcessingOptions:
     keep_original: bool = False
     workers: int = 4
     keep_audio_langs: list[str] = field(default_factory=lambda: ["jpn"])
+    # Remove the subtitles already inside the episode (except keep_sub_langs).
+    # False = keep every original subtitle and just add the new one.
+    remove_existing_subs: bool = True
     keep_sub_langs: list[str] = field(default_factory=list)
     edit_target_lang: str = ""
     edit_new_lang: str = "ara"

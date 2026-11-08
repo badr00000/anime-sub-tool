@@ -206,6 +206,11 @@ def get_stylesheet() -> str:
         border: 1px solid {c.blue};
         background-color: #08101a;
     }}
+    QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {{
+        color: {c.text_muted};
+        background-color: rgba(6, 10, 17, 0.5);
+        border-color: {c.border};
+    }}
     QLineEdit[state="ok"] {{ border: 1px solid {c.blue}; }}
     QLineEdit[state="bad"] {{ border: 1px solid {c.red}; }}
 
@@ -234,12 +239,26 @@ def get_stylesheet() -> str:
         image: url({ASSETS}/arrow_down.svg); width: 10px; height: 6px;
     }}
     QComboBox QAbstractItemView::item {{ min-height: 26px; padding: 2px 6px; }}
-    QComboBox QAbstractItemView::indicator {{
+
+    /* Searchable language popup */
+    QFrame#langPopup {{
+        background: {c.bg_input};
+        border: 1px solid {c.blue};
+    }}
+    QFrame#langPopup QListView {{
+        background: {c.bg_input};
+        border: none;
+        outline: none;
+    }}
+    QFrame#langPopup QListView::item {{ min-height: 26px; padding: 2px 6px; color: {c.text}; }}
+    QFrame#langPopup QListView::item:hover {{ background: {c.bg_hover}; }}
+    QFrame#langPopup QListView::item:selected {{ background: {c.blue_glow}; color: {c.blue_bright}; }}
+    QFrame#langPopup QListView::indicator {{
         width: 13px; height: 13px;
         border: 1px solid {c.border_hover};
         background: {c.bg};
     }}
-    QComboBox QAbstractItemView::indicator:checked {{
+    QFrame#langPopup QListView::indicator:checked {{
         background: {c.blue};
         border: 1px solid {c.blue_bright};
         image: url({ASSETS}/check.svg);
