@@ -5,7 +5,24 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
+from core.languages import name_of
 from gui.theme import Colors
+from gui.widgets.language_picker import LanguageCombo, MultiLanguageCombo
+
+
+def _follow_language(combo: "LanguageCombo", name_edit: QLineEdit) -> None:
+    """Keep the track name in step with the language ('Arabic' -> 'English'),
+    unless the user typed a custom name."""
+    state = {"last": combo.value()}
+
+    def on_change(_):
+        new = combo.value()
+        current = name_edit.text().strip()
+        if not current or current == name_of(state["last"]):
+            name_edit.setText(name_of(new))
+        state["last"] = new
+
+    combo.currentIndexChanged.connect(on_change)
 
 # (label shown in the UI, value stored in ProcessingOptions.subtitle_charset)
 CHARSET_CHOICES = [
@@ -43,7 +60,10 @@ class OptionsPanel(QWidget):
         scroll.setStyleSheet("QScrollArea { background: transparent; }")
         
         content_widget = QWidget()
-        content_widget.setStyleSheet("QWidget { background: transparent; }")
+        # Only this container is transparent: a plain "QWidget {...}" rule here would also
+        # cascade into every dropdown popup and make their lists see-through.
+        content_widget.setObjectName("optionsContent")
+        content_widget.setStyleSheet("#optionsContent { background: transparent; }")
         
         scroll_layout = QVBoxLayout(content_widget)
         scroll_layout.setContentsMargins(0, 0, 8, 0)
@@ -76,10 +96,9 @@ class OptionsPanel(QWidget):
         filter_group = QGroupBox("TRACK FILTERS")
         filter_layout = QVBoxLayout(filter_group)
         
-        self.audio_input = QLineEdit("jpn")
-        self.audio_input.setPlaceholderText("jpn, eng (empty = keep all)")
-        self.sub_input = QLineEdit("")
-        self.sub_input.setPlaceholderText("ara, eng (empty = remove all)")
+        self.audio_input = MultiLanguageCombo("All audio tracks (nothing ticked)")
+        self.audio_input.set_values(["jpn"])
+        self.sub_input = MultiLanguageCombo("None — remove all original subtitles")
         filter_layout.addWidget(self._field("KEEP AUDIO", self.audio_input))
         filter_layout.addWidget(self._field("KEEP ORIGINAL SUBS", self.sub_input))
 
@@ -100,6 +119,17 @@ class OptionsPanel(QWidget):
             self.charset_combo.addItem(label, value)
         self.charset_combo.setToolTip("Fixes Arabic text that shows up as garbage symbols.")
 
+        # Language + track name of the subtitle being added (defaults come from Settings)
+        default_lang = (self.config.subtitle_language if self.config else "") or "ara"
+        default_name = (self.config.subtitle_name if self.config else "") or name_of(default_lang)
+        self.sub_lang_combo = LanguageCombo()
+        self.sub_lang_combo.set_value(default_lang)
+        self.sub_name_edit = QLineEdit(default_name)
+        self.sub_name_edit.setPlaceholderText("Name shown in the player")
+        _follow_language(self.sub_lang_combo, self.sub_name_edit)
+
+        subtitle_layout.addWidget(self._field("LANGUAGE", self.sub_lang_combo))
+        subtitle_layout.addWidget(self._field("TRACK NAME", self.sub_name_edit))
         subtitle_layout.addWidget(self._field("SHIFT TIMING   ( + LATER / − EARLIER )", self.offset_spin))
         subtitle_layout.addWidget(self._field("ENCODING", self.charset_combo))
 
@@ -107,16 +137,15 @@ class OptionsPanel(QWidget):
         editor_group = QGroupBox("FIX EXISTING TRACK")
         editor_layout = QVBoxLayout(editor_group)
 
-        self.edit_target = QLineEdit("")
-        self.edit_target.setPlaceholderText("und (empty = off)")
-        self.edit_new_lang = QLineEdit("ara")
+        self.edit_target = LanguageCombo(empty_label="Off — don't change any track",
+                                         include_undetermined=True)
+        self.edit_new_lang = LanguageCombo()
+        self.edit_new_lang.set_value("ara")
         self.edit_new_name = QLineEdit("Arabic")
+        _follow_language(self.edit_new_lang, self.edit_new_name)
         editor_layout.addWidget(self._field("TRACK LANGUAGE TO FIX", self.edit_target))
-        pair = QHBoxLayout()
-        pair.setSpacing(8)
-        pair.addWidget(self._field("NEW LANGUAGE", self.edit_new_lang))
-        pair.addWidget(self._field("NEW NAME", self.edit_new_name))
-        editor_layout.addLayout(pair)
+        editor_layout.addWidget(self._field("CHANGE IT TO", self.edit_new_lang))
+        editor_layout.addWidget(self._field("NEW TRACK NAME", self.edit_new_name))
 
         self.isolate_track_cb = QCheckBox("Remove all other original subtitles")
         self.isolate_track_cb.setChecked(False)
@@ -165,11 +194,14 @@ class OptionsPanel(QWidget):
 
     def _load_preset(self, name: str):
         if not self.config or name == "Default":
-            self.audio_input.setText("jpn")
-            self.sub_input.setText("")
-            self.edit_target.setText("")
-            self.edit_new_lang.setText("ara")
+            self.audio_input.set_values(["jpn"])
+            self.sub_input.set_values([])
+            self.edit_target.set_value("")
+            self.edit_new_lang.set_value("ara")
             self.edit_new_name.setText("Arabic")
+            lang = (self.config.subtitle_language if self.config else "") or "ara"
+            self.sub_lang_combo.set_value(lang)
+            self.sub_name_edit.setText((self.config.subtitle_name if self.config else "") or name_of(lang))
             self.isolate_track_cb.setChecked(False)
             self.subfolder_cb.setChecked(True)
             self.dry_run_cb.setChecked(False)
@@ -180,11 +212,13 @@ class OptionsPanel(QWidget):
             
         preset = self.config.presets.get(name)
         if preset:
-            self.audio_input.setText(",".join(preset.get("keep_audio_langs", ["jpn"])))
-            self.sub_input.setText(",".join(preset.get("keep_sub_langs", [])))
-            self.edit_target.setText(preset.get("edit_target_lang", ""))
-            self.edit_new_lang.setText(preset.get("edit_new_lang", "ara"))
+            self.audio_input.set_values(preset.get("keep_audio_langs", ["jpn"]))
+            self.sub_input.set_values(preset.get("keep_sub_langs", []))
+            self.edit_target.set_value(preset.get("edit_target_lang", ""))
+            self.edit_new_lang.set_value(preset.get("edit_new_lang", "ara"))
             self.edit_new_name.setText(preset.get("edit_new_name", "Arabic"))
+            self.sub_lang_combo.set_value(preset.get("subtitle_language", "ara"))
+            self.sub_name_edit.setText(preset.get("subtitle_name", name_of(self.sub_lang_combo.value())))
             self.isolate_track_cb.setChecked(preset.get("isolate_edited_track", False))
             self.subfolder_cb.setChecked(preset.get("create_output_folder", True))
             self.dry_run_cb.setChecked(preset.get("dry_run", False))
@@ -213,7 +247,9 @@ class OptionsPanel(QWidget):
                 "dry_run": opts.dry_run,
                 "workers": opts.workers,
                 "subtitle_offset_ms": opts.subtitle_offset_ms,
-                "subtitle_charset": opts.subtitle_charset
+                "subtitle_charset": opts.subtitle_charset,
+                "subtitle_language": opts.subtitle_language,
+                "subtitle_name": opts.subtitle_name
             }
             if not self.config.presets:
                 self.config.presets = {}
@@ -240,18 +276,21 @@ class OptionsPanel(QWidget):
     def get_options(self):
         """Return a ProcessingOptions with the current UI values."""
         if ProcessingOptions:
-            audio_langs = [x.strip() for x in self.audio_input.text().split(",") if x.strip()]
-            sub_langs = [x.strip() for x in self.sub_input.text().split(",") if x.strip()]
-            
+            audio_langs = self.audio_input.values()
+            sub_langs = self.sub_input.values()
+            sub_lang = self.sub_lang_combo.value() or "ara"
+
             return ProcessingOptions(
+                subtitle_language=sub_lang,
+                subtitle_name=self.sub_name_edit.text().strip() or name_of(sub_lang),
                 create_output_folder=self.subfolder_cb.isChecked(),
                 dry_run=self.dry_run_cb.isChecked(),
                 parallel_workers=self.worker_spin.value(),
                 workers=self.worker_spin.value(),
                 keep_audio_langs=audio_langs,
                 keep_sub_langs=sub_langs,
-                edit_target_lang=self.edit_target.text().strip(),
-                edit_new_lang=self.edit_new_lang.text().strip(),
+                edit_target_lang=self.edit_target.value(),
+                edit_new_lang=self.edit_new_lang.value() or "ara",
                 edit_new_name=self.edit_new_name.text().strip(),
                 isolate_edited_track=self.isolate_track_cb.isChecked(),
                 subtitle_offset_ms=round(self.offset_spin.value() * 1000),

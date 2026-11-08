@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QThread, Signal, Qt, QTimer
 from PySide6.QtGui import QAction, QFont
 
-from gui.theme import Colors, add_glow, get_stylesheet, page_header
+from gui.theme import Colors, add_glow, apply_palette, get_stylesheet, page_header
 from gui.widgets.sidebar import Sidebar
 from gui.widgets.sync_page import SyncPage
 from gui.widgets.folder_picker import FolderPicker
@@ -136,6 +136,7 @@ class AnimeSubToolApp(QMainWindow):
         self.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
 
         # Apply theme to the whole application (dialogs and message boxes included)
+        apply_palette(QApplication.instance())
         QApplication.instance().setStyleSheet(get_stylesheet())
 
         # Set font
@@ -464,7 +465,13 @@ class AnimeSubToolApp(QMainWindow):
     def _show_settings(self):
         if self.config:
             dlg = SettingsDialog(self.config, self)
-            dlg.exec()
+            if dlg.exec():
+                # New default language/name applies right away to the options panel
+                if self.options_panel.config is not None:
+                    self.options_panel.config.subtitle_language = self.config.subtitle_language
+                    self.options_panel.config.subtitle_name = self.config.subtitle_name
+                self.options_panel.sub_lang_combo.set_value(self.config.subtitle_language)
+                self.options_panel.sub_name_edit.setText(self.config.subtitle_name)
 
     def _show_about(self):
         dlg = AboutDialog(self)

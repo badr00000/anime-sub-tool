@@ -6,6 +6,9 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
+from gui.widgets.language_picker import LanguageCombo
+from gui.widgets.options_panel import _follow_language
+
 try:
     from core.models import AppConfig
     from core.config import save_config
@@ -57,11 +60,13 @@ class SettingsDialog(QDialog):
         self.subfolder_edit = QLineEdit(config.output_subfolder if config else "PROCESSED")
         proc_layout.addRow("Output subfolder:", self.subfolder_edit)
 
-        self.sub_lang_edit = QLineEdit(config.subtitle_language if config else "ara")
-        proc_layout.addRow("Subtitle language:", self.sub_lang_edit)
+        self.sub_lang_edit = LanguageCombo()
+        self.sub_lang_edit.set_value(config.subtitle_language if config else "ara")
+        proc_layout.addRow("Default subtitle language:", self.sub_lang_edit)
 
         self.sub_name_edit = QLineEdit(config.subtitle_name if config else "Arabic")
         proc_layout.addRow("Subtitle name:", self.sub_name_edit)
+        _follow_language(self.sub_lang_edit, self.sub_name_edit)
 
         # Buttons
         btn_layout = QHBoxLayout()
@@ -92,7 +97,7 @@ class SettingsDialog(QDialog):
             self.config.mkvtoolnix_path = self.mkv_path_edit.text()
             self.config.default_workers = self.workers_spin.value()
             self.config.output_subfolder = self.subfolder_edit.text()
-            self.config.subtitle_language = self.sub_lang_edit.text()
+            self.config.subtitle_language = self.sub_lang_edit.value() or "ara"
             self.config.subtitle_name = self.sub_name_edit.text()
             save_config(self.config)
         self.accept()

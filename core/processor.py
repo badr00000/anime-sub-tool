@@ -3,6 +3,7 @@ from typing import Callable, Optional
 from core.models import EpisodeMatch, ProcessingOptions, ProcessingResult, ProcessingStatus, EpisodePreview, PreviewOperation, TrackType, Track
 from core.mkvtools import MKVToolsWrapper
 from core.subtitles import resolve_charset
+from core.languages import normalize, same_language
 from core.constants import JAPANESE_LANGUAGE_CODES, ARABIC_LANGUAGE_CODES
 from utils.logger import get_logger
 from utils.paths import generate_output_filename, ensure_output_dir
@@ -43,7 +44,8 @@ class EpisodeProcessor:
         # "remove all audio": a video with no sound is never what the user wants here.
         audio_track_ids = None
         if self.options.keep_audio_langs:
-            wanted = [t.id for t in audio_tracks if t.language in self.options.keep_audio_langs]
+            keep_audio = {normalize(c) for c in self.options.keep_audio_langs}
+            wanted = [t.id for t in audio_tracks if normalize(t.language) in keep_audio]
             if wanted:
                 audio_track_ids = wanted
             else:
@@ -56,12 +58,13 @@ class EpisodeProcessor:
         edited_track_id = None
         if self.options.edit_target_lang:
             for t in sub_tracks:
-                if t.language == self.options.edit_target_lang:
+                if same_language(t.language, self.options.edit_target_lang):
                     edited_track_id = t.id
                     break  # Only edit the first matching track
                     
         if self.options.keep_sub_langs:
-            sub_track_ids = [t.id for t in sub_tracks if t.language in self.options.keep_sub_langs]
+            keep_subs = {normalize(c) for c in self.options.keep_sub_langs}
+            sub_track_ids = [t.id for t in sub_tracks if normalize(t.language) in keep_subs]
         else:
             sub_track_ids = [] # strip all original subs by default
             

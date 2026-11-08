@@ -62,6 +62,31 @@ def add_glow(widget: QWidget, color: str = Colors.blue, radius: int = 22) -> Non
     widget.setGraphicsEffect(effect)
 
 
+def apply_palette(app) -> None:
+    """Dark base palette so popups, item views and dialogs never fall back to Qt's light defaults."""
+    from PySide6.QtGui import QPalette
+
+    c = Colors
+    pal = QPalette()
+    roles = {
+        QPalette.ColorRole.Window: c.bg,
+        QPalette.ColorRole.WindowText: c.text,
+        QPalette.ColorRole.Base: c.bg_input,
+        QPalette.ColorRole.AlternateBase: "#0b121c",
+        QPalette.ColorRole.Text: c.text,
+        QPalette.ColorRole.Button: c.bg_hover,
+        QPalette.ColorRole.ButtonText: c.text,
+        QPalette.ColorRole.Highlight: c.blue_deep,
+        QPalette.ColorRole.HighlightedText: "#ffffff",
+        QPalette.ColorRole.ToolTipBase: c.bg_input,
+        QPalette.ColorRole.ToolTipText: c.text,
+        QPalette.ColorRole.PlaceholderText: c.text_muted,
+    }
+    for role, color in roles.items():
+        pal.setColor(role, QColor(color))
+    app.setPalette(pal)
+
+
 def page_header(title: str, subtitle: str, accent: str = Colors.blue) -> QWidget:
     """Accent bar + big spaced title + one-line subtitle, used at the top of every page."""
     from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
@@ -201,9 +226,23 @@ def get_stylesheet() -> str:
         image: url({ASSETS}/arrow_down.svg); width: 9px; height: 5px;
     }}
 
+    /* combobox-popup: 0 = a scrolling list that respects maxVisibleItems,
+       instead of a menu as tall as the screen */
+    QComboBox {{ combobox-popup: 0; }}
     QComboBox::drop-down {{ border: none; width: 28px; }}
     QComboBox::down-arrow {{
         image: url({ASSETS}/arrow_down.svg); width: 10px; height: 6px;
+    }}
+    QComboBox QAbstractItemView::item {{ min-height: 26px; padding: 2px 6px; }}
+    QComboBox QAbstractItemView::indicator {{
+        width: 13px; height: 13px;
+        border: 1px solid {c.border_hover};
+        background: {c.bg};
+    }}
+    QComboBox QAbstractItemView::indicator:checked {{
+        background: {c.blue};
+        border: 1px solid {c.blue_bright};
+        image: url({ASSETS}/check.svg);
     }}
     QComboBox QAbstractItemView {{
         background-color: {c.bg_input};
