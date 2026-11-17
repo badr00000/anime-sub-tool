@@ -32,8 +32,12 @@ def build():
         f"--add-data={ROOT / 'core'};core",
         f"--add-data={ROOT / 'cli'};cli",
         f"--add-data={ROOT / 'utils'};utils",
-        f"--add-data={ROOT / 'bin'};bin",
+        # Only mkvmerge is needed at run time (not the whole bin folder)
+        f"--add-data={ROOT / 'bin' / 'mkvmerge.exe'};bin",
         f"--add-data={ROOT / 'app_icon.ico'};.",
+        # Licence notices, shown by About -> Licenses
+        f"--add-data={ROOT / 'THIRD_PARTY_LICENSES.md'};.",
+        f"--add-data={ROOT / 'licenses'};licenses",
     ]
 
     try:

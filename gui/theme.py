@@ -62,6 +62,17 @@ def add_glow(widget: QWidget, color: str = Colors.blue, radius: int = 22) -> Non
     widget.setGraphicsEffect(effect)
 
 
+def plain_tooltip(text: str) -> str:
+    """Tooltip text that is never interpreted as markup.
+
+    Qt renders a tooltip as rich text whenever it looks like HTML, and tooltips
+    here show file names and messages taken from files.
+    """
+    import html
+
+    return "<qt>" + html.escape(text).replace("\n", "<br>") + "</qt>"
+
+
 def apply_palette(app) -> None:
     """Dark base palette so popups, item views and dialogs never fall back to Qt's light defaults."""
     from PySide6.QtGui import QPalette

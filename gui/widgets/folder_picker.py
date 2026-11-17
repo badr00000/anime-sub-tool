@@ -8,10 +8,8 @@ from PySide6.QtWidgets import (
     QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout,
 )
 
+from core.matcher import list_media_files
 from gui.theme import Colors
-
-VIDEO_EXTS = {'.mkv', '.mp4', '.webm', '.avi'}
-SUB_EXTS = {'.ass', '.ssa', '.srt', '.vtt', '.sub'}
 
 
 class FolderPicker(QFrame):
@@ -43,7 +41,7 @@ class FolderPicker(QFrame):
         self.headline.setStyleSheet(f"font-size: 16px; font-weight: 800; letter-spacing: 3px;"
                                     f" color: {Colors.text}; background: transparent;")
 
-        hint = QLabel("Episodes (.mkv) and subtitles (.srt / .ass) in the same folder")
+        hint = QLabel("Episodes (.mkv, .mp4, …) and subtitles (.srt / .ass, …) in the same folder")
         hint.setProperty("role", "hint")
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -62,6 +60,7 @@ class FolderPicker(QFrame):
         row.addWidget(self.browse_btn)
 
         self.status_label = QLabel("")
+        self.status_label.setTextFormat(Qt.TextFormat.PlainText)
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         layout.addWidget(self.icon)
@@ -114,10 +113,9 @@ class FolderPicker(QFrame):
     def _on_text_changed(self, text: str):
         path = Path(text.strip()) if text.strip() else None
         if path and path.is_dir():
-            files = [f for f in path.iterdir() if f.is_file()]
-            videos = sum(1 for f in files if f.suffix.lower() in VIDEO_EXTS)
-            subs = sum(1 for f in files if f.suffix.lower() in SUB_EXTS)
-            self._set_state("ok", f"▲ {videos} EPISODE(S)   ·   {subs} SUBTITLE(S) FOUND")
+            # Counted exactly the way the scan will see the folder
+            videos, subs = list_media_files(path)
+            self._set_state("ok", f"▲ {len(videos)} EPISODE(S)   ·   {len(subs)} SUBTITLE(S) FOUND")
         elif text.strip():
             self._set_state("bad", "✕ FOLDER NOT FOUND")
         else:

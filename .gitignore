@@ -15,3 +15,6 @@ test_data/PROCESSED/
 .vscode/
 .idea/
 Thumbs.db
+
+# Tests
+.pytest_cache/

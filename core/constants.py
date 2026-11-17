@@ -33,56 +33,25 @@ SUBTITLE_EXTENSIONS = frozenset({
     ".idx",           # VobSub index
 })
 
-# Subtitle formats that are text-based (can be inspected/edited)
-TEXT_SUBTITLE_EXTENSIONS = frozenset({
-    ".ass", ".ssa", ".srt", ".vtt",
-})
+# Text subtitles whose character set can be detected/converted and whose timing
+# the Sync tool can shift.
+TEXT_SUBTITLE_EXTENSIONS = frozenset({".ass", ".ssa", ".srt"})
 
-# ──────────────────────────────────────────────────────────────
-# Language Codes (ISO 639-2 / BCP 47)
-# ──────────────────────────────────────────────────────────────
-
-JAPANESE_LANGUAGE_CODES = frozenset({
-    # ISO 639-2
-    "jpn", "ja", "jp",
-    # IETF BCP 47 prefixes
-    "ja-jp", "ja-jpn",
-})
-
-ARABIC_LANGUAGE_CODES = frozenset({
-    # ISO 639-2
-    "ara", "ar",
-    # IETF BCP 47 prefixes
-    "ar-eg", "ar-sa", "ar-ae",
-})
-
-# Default language settings for embedding
-DEFAULT_SUBTITLE_LANGUAGE = "ara"       # ISO 639-2 for Arabic
-DEFAULT_SUBTITLE_NAME = "Arabic"
-DEFAULT_AUDIO_LANGUAGE = "jpn"          # ISO 639-2 for Japanese
-
-# Language code for "undetermined" — some anime files use this
-UNDETERMINED_LANGUAGE = "und"
-
-# ──────────────────────────────────────────────────────────────
-# MKVToolNix
-# ──────────────────────────────────────────────────────────────
-
-MKVTOOLNIX_DEFAULT_PATHS = [
-    r"C:\Program Files\MKVToolNix",
-    r"C:\Program Files (x86)\MKVToolNix",
-    r"/usr/bin",
-    r"/usr/local/bin",
-]
-
-MKVMERGE_EXE = "mkvmerge.exe"
-MKVPROPEDIT_EXE = "mkvpropedit.exe"
-MKVINFO_EXE = "mkvinfo.exe"
+# Outputs written next to their sources carry this marker so the scanner never
+# picks them up again as episodes.
+OUTPUT_MARKER = "[AnimeSubTool]"
 
 # mkvmerge exit codes
 MKVMERGE_SUCCESS = 0
 MKVMERGE_WARNING = 1
 MKVMERGE_ERROR = 2
+
+MKVTOOLNIX_DEFAULT_PATHS = [
+    r"C:\Program Files\MKVToolNix",
+    r"C:\Program Files (x86)\MKVToolNix",
+    "/usr/bin",
+    "/usr/local/bin",
+]
 
 # ──────────────────────────────────────────────────────────────
 # Processing Defaults
@@ -92,9 +61,6 @@ DEFAULT_OUTPUT_SUBFOLDER = "PROCESSED"
 DEFAULT_PARALLEL_WORKERS = 4
 MAX_PARALLEL_WORKERS = 8
 MIN_PARALLEL_WORKERS = 1
-
-# Estimated processing time per episode (seconds) — for ETA calculation
-ESTIMATED_SECONDS_PER_EPISODE = 5.0
 
 # ──────────────────────────────────────────────────────────────
 # Filename Patterns (Regex)
@@ -122,9 +88,6 @@ EPISODE_PATTERNS = [
     r'\s(\d{1,4})(?:v\d+)?\s*[\[\(]',
 ]
 
-# Characters to strip when normalizing series names
-FILENAME_STRIP_CHARS = set('[](){}!@#$%^&*+=|\\/<>?~`')
-
 # ──────────────────────────────────────────────────────────────
 # UI Constants
 # ──────────────────────────────────────────────────────────────
@@ -137,9 +100,6 @@ MIN_WINDOW_HEIGHT = 650
 DEFAULT_WINDOW_WIDTH = 1100
 DEFAULT_WINDOW_HEIGHT = 750
 
-# Progress update interval (milliseconds)
-PROGRESS_UPDATE_INTERVAL_MS = 100
-
 # Log panel max lines
 LOG_MAX_LINES = 5000
 
@@ -150,3 +110,6 @@ LOG_MAX_LINES = 5000
 CONFIG_DIR_NAME = ".anime-sub-tool"
 CONFIG_FILE_NAME = "config.json"
 LOG_DIR_NAME = "logs"
+LOG_FILE_NAME = "anime-sub-tool.log"
+LOG_MAX_BYTES = 1_000_000
+LOG_BACKUP_COUNT = 3

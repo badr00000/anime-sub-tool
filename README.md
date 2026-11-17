@@ -1,60 +1,146 @@
-# 🎬 Anime Subtitle Automation Tool v2.0
+# Anime Subtitle Automation Tool v2.0
 
-A powerful, smart, and fully automated batch tool designed to seamlessly merge MKV anime videos with downloaded subtitle files. It uses fuzzy string matching (via `anitopy` and `rapidfuzz`) to automatically link confusing episode names, and executes blistering fast multi-threaded processing using a bundled `MKVToolNix` engine.
+A Windows desktop tool that merges a season of anime episodes with their
+downloaded subtitle files in one go. It pairs each episode with its subtitle by
+episode number, runs `mkvmerge` for every pair, and writes the results to a
+separate folder. **The original files are never modified.**
 
-![Anime Sub Tool](https://via.placeholder.com/800x400.png?text=Anime+Subtitle+Automation+Tool)
+It also includes a small standalone tool to fix subtitle timing (Sync Subtitle).
 
-## ✨ Key Features
+## Features
 
-- **🧠 Smart AI Matching:** Automatically matches differently named video and subtitle files using advanced parsing (`anitopy`) and fuzzy text matching (`rapidfuzz`). 
-  - *Example: `[Cleo]Mousou_Dairinin_-_01` will perfectly match `[Scarlet] Paranoia Agent - 01`.*
-- **⚡ Blazing Fast Multi-Threading:** Process multiple episodes simultaneously. Utilize up to 100% of your CPU for massive batch operations.
-- **👁️ Watch Folder Daemon:** Automatically monitors a folder in the background. Just drop new `.mkv` files into the folder and they will be processed instantly!
-- **🎛️ Advanced Custom Filters:** 
-  - Keep specific audio tracks (e.g. `jpn, eng`).
-  - Strip or keep specific subtitle tracks.
-- **⏱️ Sync Subtitle (standalone tool):** Play an episode with a `.srt`/`.ass` subtitle on top, nudge it earlier/later while watching (`G` / `H`, like VLC), then save a shifted copy (`name.synced.srt`). The original files are never modified. Also available from the CLI: `python main.py shift file.srt --offset 1.5`.
-- **💾 Configuration Presets:** Save your favorite filters, thread counts, and configurations as profiles to load them with a single click.
-- **📦 Fully Portable:** No need to install `MKVToolNix`! The required binaries (`mkvmerge` and `mkvpropedit`) are bundled internally. Just run the `.exe` anywhere.
+- **Merge Season** — a four-step wizard: *Select* a folder, *Preview* the
+  pairing, *Process*, *Results*.
+- **Matching by episode number.** File names are parsed with `anitopy`
+  (plus fallback patterns), so `[Cleo]Mousou_Dairinin_-_01` is paired with
+  `[Scarlet Team] Paranoia Agent - 01`. What the matcher does and does not do:
+  - the episode number decides the pairing; when both names state a season
+    (`S02E05`, `2nd Season`) the seasons must agree too;
+  - the title similarity (via `rapidfuzz`) is shown as a percentage. Different
+    titles do **not** block a match — groups use different spellings and
+    translated titles — but such rows are flagged `⚠ CHECK` in the preview so
+    you can verify them;
+  - openings, endings, previews, menus and similar extras (`NCOP`, `NCED`, `OP`,
+    `ED`, `PV`, `Preview`, `Menu`, …) are never paired with an episode subtitle;
+    `OVA` / `Special` files are only paired with a subtitle that is also marked
+    `OVA` / `Special`;
+  - a multi-episode file such as `01-02` is matched by its first number;
+  - if `Show - 01.srt` and `Show - 01.synced.srt` both exist, the synced copy is used.
+- **Track cleanup** — keep only the audio languages you choose, remove (or
+  keep) the subtitles already inside the episode, optionally relabel an
+  existing subtitle track.
+- **Subtitle options** — language and track name, timing shift, and character
+  encoding. Encoding is auto-detected (UTF-8, UTF-16, Windows-1256 Arabic,
+  Windows-1252 Western, Shift-JIS, GB18030, Big5, EUC-KR) or can be chosen by
+  hand; legacy encodings are converted to UTF-8 inside the MKV. The detected
+  encoding is shown in the tooltip of each subtitle in the preview.
+- **Language dropdowns everywhere** — pick `Japanese (jpn)` from a searchable
+  list instead of typing codes. The search accepts English names, ISO codes and
+  Arabic names (for example `ياباني`).
+- **Presets** — save the options panel under a name and load it later.
+- **Watch folder** — optional: while it is ticked on the first page, the folder
+  is **rescanned automatically** when video or subtitle files are added or
+  changed. It only refreshes the scan; processing always starts with your click.
+- **Sync Subtitle** — play an episode with a `.srt` / `.ass` / `.ssa` subtitle
+  drawn on top, nudge the subtitle earlier or later while watching (`G` / `H`,
+  like VLC), then save a shifted copy as `name.synced.srt`. A warning appears
+  when a negative shift would push lines before 0:00. The loaded subtitle is
+  only overwritten after an explicit confirmation.
+- **Portable** — `mkvmerge` (MKVToolNix v100.0) is bundled; nothing else has to
+  be installed to use the `.exe`.
 
-## 🚀 How to Use
+## How to use (Merge Season)
 
-1. **Select Folder:** Choose the folder containing your MKV episodes and Subtitle files.
-2. **Scan:** Click "Scan Folder". The tool will pair them up with 100% confidence.
-3. **Review:** Check the preview window to see exactly what audio tracks will be kept and what subtitles will be injected.
-4. **Process:** Click "Start Processing" and watch the magic happen.
+1. **Select** — drop or browse to the folder that contains the episodes
+   (`.mkv`, `.mp4`, `.avi`, …) and the subtitle files (`.srt`, `.ass`, `.ssa`,
+   `.vtt`, VobSub `.idx`+`.sub`). Click **SCAN FOLDER**.
+2. **Preview** — the table lists every episode, the subtitle it was paired
+   with, the title similarity and a status (`READY`, `⚠ CHECK`, `NO SUB`).
+   Adjust the options on the right if needed.
+3. Click **START PROCESSING**. Up to 8 episodes are processed at once
+   (default 4; change it with *Episodes at once*). **CANCEL** lets running
+   episodes finish and skips the rest.
+4. **Results** — counts of done / skipped / failed / cancelled episodes, with
+   the reasons. **OPEN OUTPUT FOLDER** opens the folder the files were written to.
 
-*Alternatively, check the "Enable Watch Folder" box to let the tool run in the background and process files automatically as you download them!*
+Good to know:
 
-## 🛠️ Build from Source
+- Output goes to a `PROCESSED/` subfolder of the season folder (the name can be
+  changed in Settings). Output files are always `.mkv`.
+- If *Save into a PROCESSED/ subfolder* is unticked, the new files are written
+  next to the episodes as `name [AnimeSubTool].mkv`; files with that marker are
+  ignored by later scans.
+- An output file that already exists is **skipped** unless *Overwrite existing
+  output files* is ticked.
+- Episodes without a matching subtitle are **skipped** unless *Also process
+  episodes that have no subtitle* is ticked.
+- *Dry run* simulates the batch and writes nothing.
+- A subtitle file with no subtitle lines is reported as a failure for that episode.
 
-Requirements: Python 3.11+
+Settings (sidebar) holds the defaults: subtitle language and name, episodes at
+once, output subfolder name, and an optional MKVToolNix folder. Leave the
+MKVToolNix folder empty to use the bundled copy.
+
+Settings and logs are stored in `%USERPROFILE%\.anime-sub-tool\`.
+
+## Run from source
+
+Requirements: Windows, Python 3.11.
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/anime-sub-tool.git
+git clone https://github.com/<your-username>/anime-sub-tool.git   # <your-username> is a placeholder
 cd anime-sub-tool
-
-# Install requirements
-pip install -r requirements.txt
-
-# Run the application
-python main.py
+py -3.11 -m pip install -r requirements.txt
+py -3.11 main.py
 ```
 
-### Packaging into a Portable EXE
+### Command line (from source only)
 
-To build a single self-contained `.exe` (Python, Qt and the bundled MKVToolNix binaries all inside), run:
+The CLI is available when running from source: `py -3.11 main.py <command>`.
+It is **not** available from `AnimeSubTool.exe`, which is a windowed program
+without a console.
 
 ```bash
-py -3.11 -m pip install pyinstaller
+py -3.11 main.py scan "D:\Anime\Show"                 # show the pairing
+py -3.11 main.py preview "D:\Anime\Show"              # show what process would do
+py -3.11 main.py process "D:\Anime\Show" --yes        # merge the season
+py -3.11 main.py shift "Show - 01.srt" --offset 1.5   # write Show - 01.synced.srt
+py -3.11 main.py --help
+```
+
+`process` options: `--workers N` (1-8), `--output DIR`, `--dry-run`, `--yes`,
+`--offset SECONDS`, `--sub-charset NAME`, `--keep-original-subs`, `--overwrite`,
+`--include-unmatched`. Defaults (language, track name, workers, subfolder,
+MKVToolNix folder) come from the same settings file the GUI uses.
+
+`shift` refuses to write over the file it read unless `--force` is given.
+
+### Tests
+
+```bash
+py -3.11 -m pip install -r requirements-dev.txt
+py -3.11 -m pytest -q
+```
+
+### Build the portable EXE
+
+```bash
+py -3.11 -m pip install -r requirements-dev.txt
 py -3.11 build.py
 ```
 
-The result is one file: `dist/AnimeSubTool.exe`. Copy it anywhere (for example the Desktop) and double-click it; nothing else needs to be installed. The first launch takes a few seconds because the bundle unpacks itself to a temporary folder.
+The result is one file, `dist/AnimeSubTool.exe`, containing Python, Qt and
+`mkvmerge`. Copy it anywhere and double-click it. The first launch takes a few
+seconds because the bundle unpacks itself to a temporary folder.
 
-## ⚖️ License & Acknowledgements
-- UI Built with [PySide6](https://pypi.org/project/PySide6/).
-- Anime parsing powered by [anitopy](https://github.com/kuroahna/anitopy).
-- Fuzzy matching by [RapidFuzz](https://github.com/maxbachmann/RapidFuzz).
-- Powered by [MKVToolNix](https://mkvtoolnix.download/) (Bundled under GPLv2).
+## Third-party software and licenses
+
+This tool bundles and uses third-party software, each under its own licence:
+MKVToolNix / mkvmerge (GPLv2), Qt and PySide6 (LGPLv3), anitopy (MPL-2.0),
+RapidFuzz (MIT), click (BSD-3-Clause), watchdog (Apache-2.0) and
+charset-normalizer (MIT).
+
+See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the notices and source
+code locations, and [licenses/GPL-2.0.txt](licenses/GPL-2.0.txt) for the full
+GPLv2 text. The same information is available inside the app under
+**About -> Licenses**.

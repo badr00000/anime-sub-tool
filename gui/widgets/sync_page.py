@@ -16,13 +16,16 @@ from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
     QComboBox, QDoubleSpinBox, QFileDialog, QFrame, QGraphicsRectItem, QGraphicsScene,
     QGraphicsTextItem, QGraphicsView, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
-    QMessageBox, QPushButton, QSlider, QVBoxLayout, QWidget,
+    QPushButton, QSlider, QVBoxLayout, QWidget,
 )
 
 from core import subtitle_file as sf
-from gui.theme import Colors, add_glow, page_header
+from core.constants import VIDEO_EXTENSIONS
+from core.subtitles import describe_encoding
+from gui.dialogs import messages
+from gui.theme import Colors, add_glow, page_header, plain_tooltip
 
-VIDEO_EXTS = {".mkv", ".mp4", ".webm", ".avi", ".mov", ".m4v"}
+VIDEO_EXTS = VIDEO_EXTENSIONS
 SUB_EXTS = sf.SUPPORTED_EXTENSIONS
 STEP_SMALL = 50       # G / H, same as VLC
 SEEK_STEP = 5000      # ← / →
@@ -249,6 +252,13 @@ class SyncPage(QWidget):
         self.offset_hint = QLabel()
         self.offset_hint.setProperty("role", "hint")
         self.offset_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Shown when the offset pushes lines before 0:00 (they cannot be saved as they are)
+        self.clamp_lbl = QLabel("")
+        self.clamp_lbl.setTextFormat(Qt.TextFormat.PlainText)
+        self.clamp_lbl.setProperty("role", "bad")
+        self.clamp_lbl.setWordWrap(True)
+        self.clamp_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.clamp_lbl.hide()
 
         grid = QGridLayout()
         grid.setSpacing(6)
@@ -280,7 +290,10 @@ class SyncPage(QWidget):
         line_cap = QLabel("ON SCREEN NOW")
         line_cap.setProperty("role", "fieldLabel")
         line_cap.setStyleSheet(f"color: {Colors.text_muted}; font-size: 10px;")
+        # Subtitle text comes straight from a file: plain text only, or markup in a
+        # subtitle (e.g. an <img> pointing at a local file) would be rendered.
         self.line_lbl = QLabel("—")
+        self.line_lbl.setTextFormat(Qt.TextFormat.PlainText)
         self.line_lbl.setWordWrap(True)
         self.line_lbl.setMinimumHeight(44)
         self.line_lbl.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -301,12 +314,14 @@ class SyncPage(QWidget):
         self.save_as_btn = QPushButton("SAVE AS…")
         self.save_as_btn.clicked.connect(self.save_as)
         self.saved_lbl = QLabel("")
+        self.saved_lbl.setTextFormat(Qt.TextFormat.PlainText)
         self.saved_lbl.setWordWrap(True)
         self.saved_lbl.setProperty("role", "ok")
 
         pl.addWidget(cap)
         pl.addWidget(self.offset_lbl)
         pl.addWidget(self.offset_hint)
+        pl.addWidget(self.clamp_lbl)
         pl.addLayout(grid)
         pl.addWidget(exact_cap)
         pl.addLayout(exact_row)
@@ -366,7 +381,18 @@ class SyncPage(QWidget):
             self.exact.blockSignals(False)
         if self._offset != self._saved_offset:
             self.saved_lbl.setText("")
+        self._update_clamp_warning()
         self._refresh()
+
+    def clamped_lines(self) -> int:
+        return sf.count_clamped(self._sub, self._offset) if self._sub else 0
+
+    def _update_clamp_warning(self):
+        clamped = self.clamped_lines()
+        if clamped:
+            self.clamp_lbl.setText(f"⚠ {clamped} line(s) would start before 0:00 and "
+                                   "will be squeezed to 0:00 in the saved file")
+        self.clamp_lbl.setVisible(bool(clamped))
 
     # ── loading ──
     def load_video(self, path: str):
@@ -374,7 +400,7 @@ class SyncPage(QWidget):
         self.player.stop()
         self.player.setSource(QUrl.fromLocalFile(str(p)))
         self.video_field.edit.setText(str(p))
-        self.video_field.edit.setToolTip(str(p))
+        self.video_field.edit.setToolTip(plain_tooltip(str(p)))
         self.view.set_message("LOADING…")
         if self._sub is None:
             self._auto_pick_subtitle(p)
@@ -403,17 +429,24 @@ class SyncPage(QWidget):
         try:
             sub = sf.load(path)
         except (OSError, ValueError) as e:
-            QMessageBox.warning(self, "Subtitle", f"Could not read this subtitle:\n\n{e}")
+            messages.warn(self, "Subtitle", f"Could not read this subtitle:\n\n{e}")
+            return
+        if not sub.cues:
+            messages.warn(self, "Subtitle",
+                          f"No subtitle lines were found in:\n\n{Path(path).name}\n\n"
+                          "The file is empty or damaged.")
             return
         self._sub = sub
         self._cues = sorted(sub.cues, key=lambda c: c.start_ms)
         self._starts = [c.start_ms for c in self._cues]
         self._saved_offset = 0
         self.sub_field.edit.setText(path)
-        self.sub_field.edit.setToolTip(f"{path}\n{len(self._cues)} lines · encoding {sub.encoding}")
+        encoding = describe_encoding(sub.encoding)
+        self.sub_field.edit.setToolTip(plain_tooltip(
+            f"{path}\n{len(self._cues)} lines · encoding {encoding}"))
         self.saved_lbl.setText("")
         self.set_offset(0)
-        self.status_message.emit(f"Loaded {len(self._cues)} subtitle lines ({sub.encoding})")
+        self.status_message.emit(f"Loaded {len(self._cues)} subtitle lines ({encoding})")
         self._update_buttons()
 
     def _browse_video(self):
@@ -530,7 +563,10 @@ class SyncPage(QWidget):
 
     # ── saving ──
     def save(self):
-        self._write(None)
+        if not self._sub:
+            return
+        target = sf.default_output_path(self._sub.path)
+        self._write(target)
 
     def save_as(self):
         if not self._sub:
@@ -541,13 +577,28 @@ class SyncPage(QWidget):
         if path:
             self._write(path)
 
+    def _confirm_overwrite_source(self, target: Path) -> bool:
+        return messages.confirm(
+            self, "Overwrite the loaded subtitle?",
+            f"{target.name}\n\nis the subtitle file that is loaded right now. Saving here "
+            "replaces it with the shifted version and the current timing is lost.\n\n"
+            "Overwrite it?")
+
     def _write(self, target):
         if not self._sub:
             return
+        target = Path(target)
+        # Saving onto the loaded file (Save As onto it, or Save for a file that is
+        # already a '.synced' copy) destroys the source: only after an explicit yes.
+        force = False
+        if sf.is_same_file(target, self._sub.path):
+            if not self._confirm_overwrite_source(target):
+                return
+            force = True
         try:
-            out = sf.save_shifted(self._sub, self._offset, target)
-        except OSError as e:
-            QMessageBox.critical(self, "Save failed", f"Could not save the subtitle:\n\n{e}")
+            out = sf.save_shifted(self._sub, self._offset, target, force=force)
+        except (OSError, ValueError) as e:
+            messages.error(self, "Save failed", f"Could not save the subtitle:\n\n{e}")
             return
         self._saved_offset = self._offset
         self.saved_lbl.setText(f"✓ Saved {out.name}  ({sf.format_offset(self._offset)})")
@@ -559,4 +610,5 @@ class SyncPage(QWidget):
             self.player.pause()
 
     def shutdown(self):
+        self._tick.stop()
         self.player.stop()

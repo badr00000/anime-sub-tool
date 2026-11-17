@@ -1,22 +1,24 @@
 """
 Anime Subtitle Automation Tool v2.0 — Processing Engine
 
-High-level orchestrator that ties together scanning, matching, 
+High-level orchestrator that ties together scanning, matching,
 previewing, and batch processing.
 """
 
 from typing import Callable, Optional
 from pathlib import Path
 
+from core.constants import TEXT_SUBTITLE_EXTENSIONS
 from core.models import (
-    AppConfig, ScanResult, PreviewData, ProcessingOptions,
-    BatchResult, EpisodeMatch, ProcessingResult
+    AppConfig, ScanResult, PreviewData, ProcessingOptions, BatchResult,
 )
-from core.matcher import scan_folder, match_files, auto_detect_series_name
+from core.matcher import scan_folder, match_files
 from core.mkvtools import MKVToolsWrapper
 from core.processor import EpisodeProcessor
 from core.batch import BatchProcessor
+from core.subtitles import describe_encoding, detect_file_encoding
 from utils.logger import get_logger
+from utils.paths import resolve_output_dir
 
 logger = get_logger(__name__)
 
@@ -24,25 +26,30 @@ logger = get_logger(__name__)
 class ProcessingEngine:
     """High-level API used by GUI and CLI."""
 
-    def __init__(self, config: Optional[AppConfig] = None):
+    def __init__(self, config: Optional[AppConfig] = None,
+                 mkv_tools: Optional[MKVToolsWrapper] = None):
         self.config = config or AppConfig()
-        self.mkv_tools = MKVToolsWrapper(self.config.mkvtoolnix_path)
+        self.mkv_tools = mkv_tools or MKVToolsWrapper(self.config.mkvtoolnix_path)
+        self._active_batch: Optional[BatchProcessor] = None
+        self._cancel_requested = False
 
-    def scan_and_match(self, folder_path: str, series_name: str = "") -> ScanResult:
+    def default_options(self) -> ProcessingOptions:
+        return ProcessingOptions.from_config(self.config)
+
+    def scan_and_match(self, folder_path) -> ScanResult:
         """Scan a folder and match video files to subtitle files."""
-        path = Path(folder_path) if isinstance(folder_path, str) else folder_path
+        path = Path(folder_path).resolve()
 
         videos, subtitles = scan_folder(path)
-
         matches, unmatched_videos, unmatched_subtitles = match_files(videos, subtitles)
 
-        detected_series = series_name
-        if not detected_series:
-            detected_series = auto_detect_series_name(videos + subtitles)
+        for match in matches:
+            sub = match.subtitle
+            if sub and sub.filepath.suffix.lower() in TEXT_SUBTITLE_EXTENSIONS:
+                sub.encoding = describe_encoding(detect_file_encoding(sub.filepath))
 
         return ScanResult(
             folder_path=path,
-            series_name=detected_series,
             video_files=videos,
             subtitle_files=subtitles,
             matches=matches,
@@ -50,22 +57,16 @@ class ProcessingEngine:
             unmatched_subtitles=unmatched_subtitles,
         )
 
+    @staticmethod
+    def output_dir(scan_result: ScanResult, options: ProcessingOptions) -> Path:
+        """Folder the processed files of this scan are written to."""
+        return resolve_output_dir(scan_result.folder_path, options.output_dir,
+                                  options.create_output_folder, options.output_folder)
+
     def generate_preview(self, scan_result: ScanResult, options: ProcessingOptions) -> PreviewData:
         """Generate preview data showing what operations will be performed."""
         processor = EpisodeProcessor(self.mkv_tools, options)
-
-        previews = []
-        all_operations = []
-        for match in scan_result.matches:
-            ep_preview = processor.generate_preview(match)
-            previews.append(ep_preview)
-            all_operations.extend(ep_preview.operations)
-
-        return PreviewData(
-            episodes=previews,
-            operations=all_operations,
-            total_operations=len(all_operations),
-        )
+        return PreviewData(episodes=[processor.generate_preview(m) for m in scan_result.matches])
 
     def process_batch(
         self,
@@ -80,21 +81,23 @@ class ProcessingEngine:
             processor, max_workers=options.parallel_workers or self.config.default_workers
         )
         self._active_batch = batch_processor
+        if self._cancel_requested:      # cancel() arrived before the batch existed
+            batch_processor.cancel()
 
-        return batch_processor.process_all(
-            matches=scan_result.matches,
-            options=options,
-            progress_callback=progress_callback,
-            log_callback=log_callback,
-        )
+        try:
+            return batch_processor.process_all(
+                matches=scan_result.matches,
+                options=options,
+                progress_callback=progress_callback,
+                log_callback=log_callback,
+            )
+        finally:
+            self._active_batch = None
+            self._cancel_requested = False
 
-    def cancel(self) -> None:
-        """Stop a running batch: episodes not started yet are skipped, running ones finish."""
-        batch = getattr(self, "_active_batch", None)
-        if batch is not None:
-            batch.cancel()
-
-    def process_single(self, match: EpisodeMatch, options: ProcessingOptions) -> ProcessingResult:
-        """Process a single episode."""
-        processor = EpisodeProcessor(self.mkv_tools, options)
-        return processor.process(match)
+    def cancel(self, force: bool = False) -> None:
+        """Stop a running batch: episodes not started yet are cancelled, running ones
+        finish (force=True stops them too)."""
+        self._cancel_requested = True
+        if self._active_batch is not None:
+            self._active_batch.cancel(force=force)

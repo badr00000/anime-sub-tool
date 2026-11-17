@@ -1,7 +1,7 @@
 """
 Click-based CLI for Anime Subtitle Automation Tool v2.0.
 
-Provides commands: process, preview, scan, version
+Provides commands: process, preview, scan, shift, version
 """
 
 import click
@@ -10,21 +10,21 @@ import os
 import time
 from pathlib import Path
 
-# Force UTF-8 output on Windows
+# Force UTF-8 output on Windows. A windowed .exe has no console: its streams are None.
 if sys.platform == 'win32':
-    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    for _stream in (sys.stdout, sys.stderr):
+        if _stream is not None and hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding='utf-8', errors='replace')
     os.environ.setdefault('PYTHONIOENCODING', 'utf-8')
 
-from core.models import ProcessingOptions, ProcessingStatus
-from core.constants import APP_NAME, APP_VERSION, DEFAULT_PARALLEL_WORKERS
+from core.config import load_config
+from core.models import ProcessingOptions
+from core.constants import (
+    APP_NAME, APP_VERSION, MAX_PARALLEL_WORKERS, MIN_PARALLEL_WORKERS,
+)
 from core.engine import ProcessingEngine
-from utils.logger import setup_logger, get_logger
-from utils.validators import validate_folder_path, validate_series_name, validate_mkvtoolnix
-
-import logging
-
-logger = get_logger(__name__)
+from utils.logger import setup_logging
+from utils.validators import validate_folder_path, validate_mkvtoolnix
 
 
 def safe_echo(text: str, **kwargs):
@@ -37,10 +37,14 @@ def safe_echo(text: str, **kwargs):
         click.echo(safe_text, **kwargs)
 
 
+def _clip(name: str, width: int = 40) -> str:
+    return name[:width - 3] + "..." if len(name) > width else name
+
+
 @click.group()
 def cli():
     """Anime Subtitle Automation Tool v2.0"""
-    setup_logger(level=logging.INFO)
+    setup_logging(console=True)
 
 
 @cli.command()
@@ -55,31 +59,32 @@ def scan(folder):
     """Scan folder and show matched files."""
     try:
         folder_path = validate_folder_path(folder)
-        engine = ProcessingEngine()
+        engine = ProcessingEngine(load_config())
 
         safe_echo(f"Scanning: {click.style(str(folder_path), fg='cyan')}")
-        result = engine.scan_and_match(str(folder_path))
+        result = engine.scan_and_match(folder_path)
 
         if not result.matches:
-            safe_echo(click.style("[!] No matches found.", fg='yellow'))
+            safe_echo(click.style("[!] No episodes found.", fg='yellow'))
             return
 
-        safe_echo(click.style(f"\n[OK] Found {len(result.matches)} matched episodes:", fg='green'))
-        if result.series_name:
-            safe_echo(f"  Series: {click.style(result.series_name, fg='cyan')}")
+        matched = sum(1 for m in result.matches if m.is_matched)
+        safe_echo(click.style(f"\n[OK] {len(result.matches)} episode(s), {matched} with a subtitle:", fg='green'))
         safe_echo("")
 
         # Table header
-        safe_echo(f"  {'Ep':<6} {'Video File':<40} {'Subtitle File':<40} {'Score'}")
+        safe_echo(f"  {'Ep':<6} {'Video File':<40} {'Subtitle File':<40} {'Title match'}")
         safe_echo(f"  {'---':<6} {'---':<40} {'---':<40} {'---'}")
 
         for match in result.matches:
             ep = match.video.episode_num or "?"
-            vid = match.video.filename[:37] + "..." if len(match.video.filename) > 40 else match.video.filename
-            sub = (match.subtitle.filename[:37] + "...") if match.subtitle and len(match.subtitle.filename) > 40 else (match.subtitle.filename if match.subtitle else "-- None --")
-            score = f"{match.score:.0f}%"
-
-            score_color = 'green' if match.score >= 80 else ('yellow' if match.score >= 50 else 'red')
+            vid = _clip(match.video.filename)
+            sub = _clip(match.subtitle.filename) if match.subtitle else "-- None --"
+            if match.subtitle:
+                score = f"{match.score:.0f}% ({match.confidence.name})"
+                score_color = 'green' if match.score >= 80 else ('yellow' if match.score >= 50 else 'red')
+            else:
+                score, score_color = "-", 'red'
             safe_echo(f"  {ep:<6} {vid:<40} {sub:<40} {click.style(score, fg=score_color)}")
 
         if result.unmatched_videos:
@@ -92,25 +97,62 @@ def scan(folder):
         sys.exit(1)
 
 
+def _processing_options(func):
+    """Options shared by `preview` and `process`, so the preview shows what process will do."""
+    decorators = [
+        click.option('--output', type=click.Path(file_okay=False, dir_okay=True),
+                     help='Folder to write the processed files to '
+                          '(default: the output subfolder inside FOLDER)'),
+        click.option('--offset', default=0.0, type=float, show_default=True,
+                     help='Shift the new subtitle in seconds: positive = later (delay), negative = earlier'),
+        click.option('--sub-charset', default='auto', show_default=True,
+                     help="Subtitle encoding: 'auto', 'utf-8', 'cp1256' (Arabic), 'cp1252', 'shift_jis', "
+                          "'gb18030', 'big5', 'euc-kr', 'utf-16', or any iconv name"),
+        click.option('--keep-original-subs', is_flag=True,
+                     help='Keep the subtitles already inside each episode (default: remove them)'),
+        click.option('--overwrite', is_flag=True,
+                     help='Replace output files that already exist (default: skip those episodes)'),
+        click.option('--include-unmatched', is_flag=True,
+                     help='Also process episodes that have no matching subtitle (default: skip them)'),
+    ]
+    for decorator in reversed(decorators):
+        func = decorator(func)
+    return func
+
+
+def _build_options(config, output, offset, sub_charset, keep_original_subs, overwrite,
+                   include_unmatched, **extra) -> ProcessingOptions:
+    opts = ProcessingOptions.from_config(config)
+    opts.output_dir = Path(output).resolve() if output else None
+    opts.subtitle_offset_ms = round(offset * 1000)
+    opts.subtitle_charset = sub_charset
+    opts.remove_existing_subs = not keep_original_subs
+    opts.overwrite_existing = overwrite
+    opts.process_unmatched = include_unmatched
+    for key, value in extra.items():
+        setattr(opts, key, value)
+    return opts
+
+
 @cli.command()
 @click.argument('folder', type=click.Path(exists=True, file_okay=False, dir_okay=True))
-@click.option('--name', required=True, help='Series name')
-def preview(folder, name):
+@_processing_options
+def preview(folder, output, offset, sub_charset, keep_original_subs, overwrite, include_unmatched):
     """Preview what would happen without making changes."""
     try:
         folder_path = validate_folder_path(folder)
-        series_name = validate_series_name(name)
-
-        engine = ProcessingEngine()
+        config = load_config()
+        engine = ProcessingEngine(config)
         safe_echo(f"Scanning: {click.style(str(folder_path), fg='cyan')}")
 
-        scan_result = engine.scan_and_match(str(folder_path), series_name)
+        scan_result = engine.scan_and_match(folder_path)
 
         if not scan_result.matches:
-            safe_echo(click.style("[!] No matches found.", fg='yellow'))
+            safe_echo(click.style("[!] No episodes found.", fg='yellow'))
             return
 
-        opts = ProcessingOptions(series_name=series_name)
+        opts = _build_options(config, output, offset, sub_charset, keep_original_subs,
+                              overwrite, include_unmatched)
         preview_data = engine.generate_preview(scan_result, opts)
 
         safe_echo(click.style(f"\n[OK] Preview -- {len(preview_data.episodes)} episodes:", fg='green'))
@@ -132,49 +174,39 @@ def preview(folder, name):
 
 @cli.command()
 @click.argument('folder', type=click.Path(exists=True, file_okay=False, dir_okay=True))
-@click.option('--name', required=True, help='Series name')
-@click.option('--workers', default=DEFAULT_PARALLEL_WORKERS, type=int, help='Number of parallel workers')
-@click.option('--no-backup', is_flag=True, help='Disable original file backup')
-@click.option('--output', type=click.Path(file_okay=False, dir_okay=True), help='Output directory')
+@click.option('--workers', default=None,
+              type=click.IntRange(MIN_PARALLEL_WORKERS, MAX_PARALLEL_WORKERS),
+              help=f'Episodes processed at once ({MIN_PARALLEL_WORKERS}-{MAX_PARALLEL_WORKERS}; '
+                   'default: the value saved in Settings)')
 @click.option('--dry-run', is_flag=True, help='Simulate without making changes')
 @click.option('--yes', '-y', is_flag=True, help='Skip confirmation prompt')
-@click.option('--offset', default=0.0, type=float, show_default=True,
-              help='Shift the new subtitle in seconds: positive = later (delay), negative = earlier')
-@click.option('--sub-charset', default='auto', show_default=True,
-              help="Subtitle encoding: 'auto', 'utf-8', 'cp1256' (Arabic), or any iconv name")
-@click.option('--keep-original-subs', is_flag=True,
-              help='Keep the subtitles already inside each episode (default: remove them)')
-def process(folder, name, workers, no_backup, output, dry_run, yes, offset, sub_charset, keep_original_subs):
+@_processing_options
+def process(folder, workers, dry_run, yes, output, offset, sub_charset, keep_original_subs,
+            overwrite, include_unmatched):
     """Process a folder -- embed subtitles and filter audio tracks."""
     try:
         folder_path = validate_folder_path(folder)
-        series_name = validate_series_name(name)
-        validate_mkvtoolnix()
+        config = load_config()
+        engine = ProcessingEngine(config)
+        validate_mkvtoolnix(engine.mkv_tools)
 
-        opts = ProcessingOptions(
-            series_name=series_name,
-            parallel_workers=workers,
-            workers=workers,
-            backup_originals=not no_backup,
-            create_backup=not no_backup,
-            output_dir=Path(output) if output else None,
-            dry_run=dry_run,
-            subtitle_offset_ms=round(offset * 1000),
-            subtitle_charset=sub_charset,
-            remove_existing_subs=not keep_original_subs,
-        )
-
-        engine = ProcessingEngine()
+        opts = _build_options(config, output, offset, sub_charset, keep_original_subs,
+                              overwrite, include_unmatched, dry_run=dry_run)
+        if workers is not None:
+            opts.parallel_workers = workers
 
         safe_echo(f"Scanning: {click.style(str(folder_path), fg='cyan')}")
-        scan_result = engine.scan_and_match(str(folder_path), series_name)
+        scan_result = engine.scan_and_match(folder_path)
 
         if not scan_result.matches:
-            safe_echo(click.style("[!] No matches found.", fg='yellow'))
+            safe_echo(click.style("[!] No episodes found.", fg='yellow'))
             return
 
         match_count = len(scan_result.matches)
-        safe_echo(f"[OK] Found {click.style(str(match_count), fg='green')} episodes to process.")
+        matched = sum(1 for m in scan_result.matches if m.is_matched)
+        safe_echo(f"[OK] Found {click.style(str(match_count), fg='green')} episode(s), "
+                  f"{matched} with a matching subtitle.")
+        safe_echo(f"  Output folder: {engine.output_dir(scan_result, opts)}")
 
         if dry_run:
             safe_echo(click.style("  [DRY RUN MODE -- no changes will be made]", fg='yellow'))
@@ -196,25 +228,25 @@ def process(folder, name, workers, no_backup, output, dry_run, yes, offset, sub_
             else:
                 safe_echo(click.style(f"  [+] {msg}", fg='green'))
 
-        def progress_cb(episode_num, file_progress, overall_progress):
-            pass  # Progress shown via log messages
-
-        batch_result = engine.process_batch(scan_result, opts, progress_cb, log_cb)
+        batch_result = engine.process_batch(scan_result, opts, None, log_cb)
 
         elapsed = time.time() - start_time
 
         # Summary
         safe_echo("")
         safe_echo(click.style("=" * 50, fg='white'))
-        safe_echo(click.style("  Processing Complete!", fg='green', bold=True))
+        title = "Dry run finished -- nothing was written" if dry_run else "Processing finished"
+        safe_echo(click.style(f"  {title}", fg='green', bold=True))
         safe_echo(click.style("=" * 50, fg='white'))
         safe_echo(f"  Total:     {batch_result.total}")
-        safe_echo(f"  Succeeded: {click.style(str(batch_result.successful), fg='green')}")
+        done_label = "Would do: " if dry_run else "Succeeded:"
+        safe_echo(f"  {done_label} {click.style(str(batch_result.successful), fg='green')}")
+        safe_echo(f"  Skipped:   {click.style(str(batch_result.skipped), fg='yellow' if batch_result.skipped else 'green')}")
         safe_echo(f"  Failed:    {click.style(str(batch_result.failed), fg='red' if batch_result.failed > 0 else 'green')}")
         safe_echo(f"  Time:      {elapsed:.1f}s")
-        if elapsed > 0 and batch_result.successful > 0:
-            speed = (batch_result.successful / elapsed) * 60
-            safe_echo(f"  Speed:     {speed:.1f} episodes/min")
+
+        if batch_result.failed:
+            sys.exit(1)
 
     except Exception as e:
         safe_echo(click.style(f"\n[ERROR] {e}", fg='red'))
@@ -227,15 +259,27 @@ def process(folder, name, workers, no_backup, output, dry_run, yes, offset, sub_
               help='Seconds: positive = show later (delay), negative = show earlier')
 @click.option('--output', '-o', type=click.Path(dir_okay=False),
               help="Output file (default: '<name>.synced.<ext>' next to the original)")
-def shift(subtitle, offset, output):
+@click.option('--force', is_flag=True,
+              help='Allow writing over the subtitle file that was read')
+def shift(subtitle, offset, output, force):
     """Shift every line of a .srt/.ass subtitle and save a synced copy."""
     from core import subtitle_file as sf
     try:
-        sub = sf.load(subtitle)
+        sub = sf.load(Path(subtitle).resolve())
+        if not sub.cues:
+            raise ValueError(f"'{sub.path.name}' contains no subtitle lines; nothing to shift.")
         offset_ms = round(offset * 1000)
-        out = sf.save_shifted(sub, offset_ms, output)
+        clamped = sf.count_clamped(sub, offset_ms)
+        out = sf.save_shifted(sub, offset_ms, Path(output).resolve() if output else None, force=force)
+        if clamped:
+            safe_echo(click.style(
+                f"[!] Warning: {clamped} of {len(sub.cues)} line(s) would start before 0:00 "
+                "and were moved to 0:00.", fg='yellow'))
         safe_echo(f"[OK] {len(sub.cues)} lines shifted {sf.format_offset(offset_ms)} -> "
                   f"{click.style(str(out), fg='cyan')}")
+    except sf.SameFileError as e:
+        safe_echo(click.style(f"[ERROR] {e} Use --force to overwrite it, or -o to pick another file.", fg='red'))
+        sys.exit(1)
     except (OSError, ValueError) as e:
         safe_echo(click.style(f"[ERROR] {e}", fg='red'))
         sys.exit(1)

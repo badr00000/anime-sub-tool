@@ -11,6 +11,8 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Optional
 
+from core.constants import DEFAULT_OUTPUT_SUBFOLDER, DEFAULT_PARALLEL_WORKERS
+
 
 # ──────────────────────────────────────────────────────────────
 # Enums
@@ -25,7 +27,6 @@ class TrackType(Enum):
 
 class ProcessingStatus(Enum):
     PENDING = auto()
-    SCANNING = auto()
     PROCESSING = auto()
     COMPLETED = auto()
     COMPLETED_WITH_WARNINGS = auto()
@@ -63,12 +64,10 @@ class Track:
 
 @dataclass
 class FileInfo:
-    """Metadata from mkvmerge -J."""
+    """Metadata from mkvmerge -J. `error` is set when the file could not be read."""
     filepath: Path
     tracks: list[Track] = field(default_factory=list)
-    duration_ns: int = 0
-    file_size: int = 0
-    supported: bool = True
+    error: str = ""
 
 
 # ──────────────────────────────────────────────────────────────
@@ -82,15 +81,12 @@ class EpisodeInfo:
     filename: str = ""
     episode_num: Optional[str] = None
     series_title: Optional[str] = None
-
-    @property
-    def episode_key(self) -> str:
-        if self.episode_num is None:
-            return ""
-        try:
-            return str(int(self.episode_num)).zfill(3)
-        except ValueError:
-            return self.episode_num.zfill(3)
+    # Season stated in the name ("S02E05", "2nd Season"); None when the name has none.
+    season: Optional[int] = None
+    # "" for a normal episode; otherwise the kind of extra ("NCOP", "PV", "OVA", ...).
+    extra_kind: str = ""
+    # Text subtitles only: human-readable detected encoding, filled in by the scan.
+    encoding: str = ""
 
 
 @dataclass
@@ -113,20 +109,20 @@ class EpisodeMatch:
 @dataclass
 class ProcessingOptions:
     """User-configurable processing options."""
-    series_name: str = ""
+    # Explicit output directory (CLI --output). None = decided by the two fields below.
     output_dir: Optional[Path] = None
-    output_folder: str = "PROCESSED"
-    output_suffix: str = ""
+    create_output_folder: bool = True
+    output_folder: str = DEFAULT_OUTPUT_SUBFOLDER
+    # False = an episode whose output file already exists is skipped.
+    overwrite_existing: bool = False
+    # False = episodes without a matching subtitle are skipped (processing them
+    # would only strip tracks from the episode).
+    process_unmatched: bool = False
     subtitle_language: str = "ara"
     subtitle_name: str = "Arabic"
     set_default: bool = True
-    create_backup: bool = True
-    parallel_workers: int = 4
+    parallel_workers: int = DEFAULT_PARALLEL_WORKERS
     dry_run: bool = False
-    backup_originals: bool = True
-    create_output_folder: bool = True
-    keep_original: bool = False
-    workers: int = 4
     keep_audio_langs: list[str] = field(default_factory=lambda: ["jpn"])
     # Remove the subtitles already inside the episode (except keep_sub_langs).
     # False = keep every original subtitle and just add the new one.
@@ -141,6 +137,16 @@ class ProcessingOptions:
     # "auto" detects (UTF-8 / Windows-1256 / ...), or an explicit charset such as "cp1256".
     subtitle_charset: str = "auto"
 
+    @classmethod
+    def from_config(cls, config: "AppConfig") -> "ProcessingOptions":
+        """Options carrying the defaults the user saved in Settings."""
+        return cls(
+            output_folder=config.output_subfolder,
+            parallel_workers=config.default_workers,
+            subtitle_language=config.subtitle_language,
+            subtitle_name=config.subtitle_name,
+        )
+
 
 @dataclass
 class ProcessingResult:
@@ -149,7 +155,7 @@ class ProcessingResult:
     output_path: Optional[Path] = None
     message: str = ""
     warnings: list[str] = field(default_factory=list)
-    duration_seconds: float = 0.0
+    video_name: str = ""
 
     @property
     def is_success(self) -> bool:
@@ -164,13 +170,8 @@ class BatchResult:
     failed: int = 0
     cancelled: int = 0
     skipped: int = 0
+    dry_run: bool = False
     results: list[ProcessingResult] = field(default_factory=list)
-    total_duration_seconds: float = 0.0
-    errors: list[str] = field(default_factory=list)
-
-    @property
-    def succeeded(self) -> int:
-        return self.successful
 
 
 # ──────────────────────────────────────────────────────────────
@@ -180,14 +181,12 @@ class BatchResult:
 @dataclass
 class ScanResult:
     """Result of scanning a folder and matching files."""
-    folder_path: Path = None
-    series_name: str = ""
+    folder_path: Optional[Path] = None
     video_files: list[EpisodeInfo] = field(default_factory=list)
     subtitle_files: list[EpisodeInfo] = field(default_factory=list)
     matches: list[EpisodeMatch] = field(default_factory=list)
     unmatched_videos: list[EpisodeInfo] = field(default_factory=list)
     unmatched_subtitles: list[EpisodeInfo] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -195,8 +194,6 @@ class PreviewOperation:
     """A single operation that will be performed."""
     action: str = ""
     target: str = ""
-    description: str = ""
-    icon: str = "✓"
 
 
 @dataclass
@@ -207,17 +204,12 @@ class EpisodePreview:
     subtitle_name: Optional[str] = None
     output_path: Optional[Path] = None
     operations: list[PreviewOperation] = field(default_factory=list)
-    estimated_time_seconds: float = 0.0
 
 
 @dataclass
 class PreviewData:
     """Complete preview data for the batch."""
     episodes: list[EpisodePreview] = field(default_factory=list)
-    operations: list[PreviewOperation] = field(default_factory=list)
-    total_operations: int = 0
-    estimated_total_time_seconds: float = 0.0
-    warnings: list[str] = field(default_factory=list)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -226,23 +218,11 @@ class PreviewData:
 
 @dataclass
 class AppConfig:
-    """Persistent application configuration."""
-    mkvtoolnix_path: str = r"C:\Program Files\MKVToolNix"
-    last_folder: str = ""
-    last_series_name: str = ""
-    default_workers: int = 4
-    max_concurrent_tasks: int = 4
-    create_backup: bool = True
-    output_subfolder: str = "PROCESSED"
+    """Persistent application configuration (Settings dialog + presets)."""
+    # Folder of a system MKVToolNix to use instead; empty = the bundled mkvmerge.
+    mkvtoolnix_path: str = ""
+    default_workers: int = DEFAULT_PARALLEL_WORKERS
+    output_subfolder: str = DEFAULT_OUTPUT_SUBFOLDER
     subtitle_language: str = "ara"
     subtitle_name: str = "Arabic"
-    theme: str = "dark"
-    window_width: int = 1100
-    window_height: int = 750
-    window_x: int = -1
-    window_y: int = -1
-    auto_detect_series_name: bool = True
-    show_preview: bool = True
-    remember_settings: bool = True
-    watch_folder_enabled: bool = False
     presets: dict[str, dict] = field(default_factory=dict)

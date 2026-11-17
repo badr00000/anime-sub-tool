@@ -13,9 +13,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from core.subtitles import detect_charset
+from core.constants import TEXT_SUBTITLE_EXTENSIONS
+from core.subtitles import detect_encoding, python_codec
 
-SUPPORTED_EXTENSIONS = {".srt", ".ass", ".ssa"}
+SUPPORTED_EXTENSIONS = TEXT_SUBTITLE_EXTENSIONS
+
+
+class SameFileError(ValueError):
+    """Saving would overwrite the subtitle that was loaded."""
 
 # 00:01:23,450 --> 00:01:26,100   (also accepts '.' as the millisecond separator)
 _SRT_TIMING = re.compile(
@@ -87,16 +92,20 @@ def format_offset(ms: int) -> str:
 
 def _read_text(path: Path) -> tuple[str, str]:
     data = path.read_bytes()
-    if data.startswith(b"\xef\xbb\xbf"):
-        return data[3:].decode("utf-8", errors="replace"), "utf-8-sig"
-    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
-        return data.decode("utf-16"), "utf-16"
-    charset = detect_charset(path) or "utf-8"
-    return data.decode(charset, errors="replace"), charset
+    encoding = detect_encoding(data)
+    if encoding is None:
+        raise ValueError(f"'{path.name}' does not look like a text subtitle file.")
+    return data.decode(python_codec(encoding), errors="replace"), encoding
 
 
 def _clean_srt_text(text: str) -> str:
-    return _HTML_TAG.sub("", text).strip()
+    # Repeat until nothing changes: removing a tag can join the pieces of another
+    # one ('<<b>img src=x<i>>' -> '<img src=x>').
+    while True:
+        stripped = _HTML_TAG.sub("", text)
+        if stripped == text:
+            return text.strip()
+        text = stripped
 
 
 def _clean_ass_text(text: str) -> str:
@@ -159,6 +168,14 @@ def load(path: str | Path) -> SubtitleFile:
 
 # ── shifting ──────────────────────────────────────────────────────────────────
 
+def count_clamped(sub: SubtitleFile, offset_ms: int) -> int:
+    """How many lines would start before 0:00 with this offset. Those cannot be
+    kept as they are: a file cannot hold negative times, so they pile up at 0."""
+    if offset_ms >= 0:
+        return 0
+    return sum(1 for cue in sub.cues if cue.start_ms + offset_ms < 0)
+
+
 def shifted_text(sub: SubtitleFile, offset_ms: int) -> str:
     """Return the file content with every timestamp moved by offset_ms (clamped at 0)."""
     if offset_ms == 0:
@@ -192,19 +209,34 @@ def shifted_text(sub: SubtitleFile, offset_ms: int) -> str:
 
 
 def default_output_path(path: str | Path) -> Path:
-    """'Show - 01.srt' -> 'Show - 01.synced.srt' (never the original file)."""
+    """'Show - 01.srt' -> 'Show - 01.synced.srt'. A file already named '.synced'
+    maps to itself; save_shifted() then refuses unless forced."""
     path = Path(path)
     stem = path.stem[:-7] if path.stem.endswith(".synced") else path.stem
     return path.with_name(f"{stem}.synced{path.suffix}")
 
 
-def save_shifted(sub: SubtitleFile, offset_ms: int, output: str | Path | None = None) -> Path:
+def is_same_file(a: str | Path, b: str | Path) -> bool:
+    a, b = Path(a), Path(b)
+    try:
+        if a.exists() and b.exists():
+            return a.samefile(b)
+    except OSError:
+        pass
+    return a.resolve() == b.resolve()
+
+
+def save_shifted(sub: SubtitleFile, offset_ms: int, output: str | Path | None = None,
+                 force: bool = False) -> Path:
     """Write a shifted copy as UTF-8 with BOM (players detect Arabic reliably).
 
-    Default target is 'name.synced.ext' next to the source, so the original is never
-    touched; re-syncing a '.synced' file updates that same copy.
+    Default target is 'name.synced.ext' next to the source. Writing onto the file
+    that was loaded raises SameFileError unless force=True.
     """
     out = Path(output) if output else default_output_path(sub.path)
+    if not force and is_same_file(out, sub.path):
+        raise SameFileError(
+            f"'{out.name}' is the subtitle that was loaded; saving would overwrite it.")
     content = shifted_text(sub, offset_ms)
     with open(out, "w", encoding="utf-8-sig", newline="") as f:
         f.write(content)

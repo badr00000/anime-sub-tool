@@ -2,13 +2,10 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QTableWidget, QTableWidgetIt
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 
-from gui.theme import Colors
+from core.models import MatchConfidence
+from gui.theme import Colors, plain_tooltip
 
-try:
-    from core.models import ScanResult, MatchConfidence
-except ImportError:
-    ScanResult = None
-    MatchConfidence = None
+_UNCERTAIN = (MatchConfidence.MEDIUM, MatchConfidence.LOW)
 
 
 class PreviewPanel(QWidget):
@@ -19,11 +16,14 @@ class PreviewPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
+        # Rich text on purpose (coloured counters). Only numbers are ever inserted
+        # into it; anything taken from a file name must go through html.escape first.
         self.summary_label = QLabel("0 files matched.")
+        self.summary_label.setTextFormat(Qt.TextFormat.RichText)
         self.summary_label.setProperty("role", "fieldLabel")
 
         self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["EP", "EPISODE FILE", "SUBTITLE FILE", "MATCH", "STATUS"])
+        self.table.setHorizontalHeaderLabels(["EP", "EPISODE FILE", "SUBTITLE FILE", "TITLE MATCH", "STATUS"])
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
@@ -50,11 +50,17 @@ class PreviewPanel(QWidget):
         matches = scan_result.matches
         self.table.setRowCount(len(matches))
 
-        unmatched_count = len(scan_result.unmatched_videos)
-        self.summary_label.setText(
-            f"// {len(matches)} EPISODES SCANNED"
-            + (f"   ·   <span style='color:{Colors.red}'>{unmatched_count} WITHOUT SUBTITLE</span>" if unmatched_count else "")
-        )
+        unmatched_count = sum(1 for m in matches if not m.is_matched)
+        uncertain_count = sum(1 for m in matches if m.is_matched and m.confidence in _UNCERTAIN)
+        unused_subs = len(scan_result.unmatched_subtitles)
+        summary = f"// {len(matches)} EPISODES SCANNED"
+        if unmatched_count:
+            summary += f"   ·   <span style='color:{Colors.red}'>{unmatched_count} WITHOUT SUBTITLE</span>"
+        if uncertain_count:
+            summary += f"   ·   <span style='color:{Colors.amber}'>{uncertain_count} TO CHECK</span>"
+        if unused_subs:
+            summary += f"   ·   {unused_subs} SUBTITLE(S) UNUSED"
+        self.summary_label.setText(summary)
 
         for i, match in enumerate(matches):
             # Episode number
@@ -64,18 +70,21 @@ class PreviewPanel(QWidget):
 
             # Video filename
             vid_item = QTableWidgetItem(match.video.filename)
-            vid_item.setToolTip(match.video.filename)
+            vid_item.setToolTip(plain_tooltip(match.video.filename))
 
-            # Subtitle filename
+            # Subtitle filename (the tooltip also tells the detected encoding)
             sub_name = match.subtitle.filename if match.subtitle else "— No match —"
             sub_item = QTableWidgetItem(sub_name)
-            sub_item.setToolTip(sub_name)
+            sub_tip = sub_name
+            if match.subtitle and match.subtitle.encoding:
+                sub_tip += f"\nEncoding: {match.subtitle.encoding}"
+            sub_item.setToolTip(plain_tooltip(sub_tip))
             if not match.subtitle:
                 sub_item.setForeground(QColor(Colors.red))
 
-            # Confidence score
+            # Title similarity
             score = match.score
-            conf_item = QTableWidgetItem(f"{score:.0f}%")
+            conf_item = QTableWidgetItem(f"{score:.0f}%" if match.is_matched else "—")
             conf_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             if score >= 80:
                 conf_item.setForeground(QColor(Colors.blue_bright))
@@ -84,14 +93,25 @@ class PreviewPanel(QWidget):
             else:
                 conf_item.setForeground(QColor(Colors.red))
 
-            # Status
-            status_text = "READY" if match.is_matched else "NO SUB"
+            # Status: matched by episode number; flagged when the titles disagree
+            if not match.is_matched:
+                status_text, status_color = "NO SUB", Colors.red
+                status_tip = ("No subtitle with this episode number. The episode is skipped "
+                              "unless 'Also process episodes that have no subtitle' is ticked.")
+            elif match.confidence in _UNCERTAIN:
+                status_text = "⚠ CHECK"
+                status_color = Colors.amber if match.confidence == MatchConfidence.MEDIUM else Colors.red
+                status_tip = ("Matched by episode number, but the two file names carry different "
+                              "titles. Normal when the subtitle uses another spelling or a "
+                              "translated title; make sure it is the same show.")
+            else:
+                status_text, status_color = "READY", Colors.blue_bright
+                status_tip = "Episode number and title agree."
             status_item = QTableWidgetItem(status_text)
             status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            if not match.is_matched:
-                status_item.setForeground(QColor(Colors.red))
-            else:
-                status_item.setForeground(QColor(Colors.blue_bright))
+            status_item.setForeground(QColor(status_color))
+            status_item.setToolTip(plain_tooltip(status_tip))
+            conf_item.setToolTip(plain_tooltip(status_tip))
 
             self.table.setItem(i, 0, ep_item)
             self.table.setItem(i, 1, vid_item)

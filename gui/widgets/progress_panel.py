@@ -85,6 +85,7 @@ class ProgressPanel(QWidget):
         self.ring = ProgressRing()
 
         self.file_label = QLabel("Preparing...")
+        self.file_label.setTextFormat(Qt.TextFormat.PlainText)
         self.file_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.file_label.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {Colors.text};"
                                       " letter-spacing: 1px; background: transparent;")

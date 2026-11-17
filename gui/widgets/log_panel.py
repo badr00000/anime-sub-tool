@@ -4,12 +4,8 @@ import time
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget
 
+from core.constants import LOG_MAX_LINES
 from gui.theme import Colors
-
-try:
-    from core.constants import LOG_MAX_LINES
-except ImportError:
-    LOG_MAX_LINES = 5000
 
 LEVEL_STYLE = {
     "INFO": ("INF", Colors.text_secondary),

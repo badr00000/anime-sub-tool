@@ -12,7 +12,9 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from PySide6.QtCore import QObject, Signal
 
+from core.constants import SUBTITLE_EXTENSIONS, VIDEO_EXTENSIONS
 from utils.logger import get_logger
+from utils.paths import is_tool_output
 
 logger = get_logger(__name__)
 
@@ -26,14 +28,15 @@ class DebouncedEventHandler(FileSystemEventHandler):
         self.debounce_seconds = debounce_seconds
         self._timer = None
         self._lock = threading.Lock()
-        self.valid_extensions = {'.mkv', '.mp4', '.avi', '.ass', '.srt', '.ssa', '.sub', '.vtt'}
+        self.valid_extensions = VIDEO_EXTENSIONS | SUBTITLE_EXTENSIONS
 
     def on_any_event(self, event):
         if event.is_directory:
             return
             
         ext = Path(event.src_path).suffix.lower()
-        if ext not in self.valid_extensions:
+        # The tool's own outputs must not trigger a rescan of the folder they land in
+        if ext not in self.valid_extensions or is_tool_output(Path(event.src_path)):
             return
 
         with self._lock:
@@ -41,7 +44,15 @@ class DebouncedEventHandler(FileSystemEventHandler):
                 self._timer.cancel()
             
             self._timer = threading.Timer(self.debounce_seconds, self._on_timeout)
+            self._timer.daemon = True
             self._timer.start()
+
+    def cancel(self):
+        """Drop a pending notification (the watcher is being stopped)."""
+        with self._lock:
+            if self._timer is not None:
+                self._timer.cancel()
+                self._timer = None
 
     def _on_timeout(self):
         logger.info("Watchdog debounce timeout reached. Emitting change event.")
@@ -58,7 +69,8 @@ class FolderWatcher(QObject):
         self.folder_path = Path(folder_path)
         self.debounce_seconds = debounce_seconds
         self.observer = None
-        
+        self._handler = None
+
     def start(self):
         if self.observer is not None:
             return
@@ -69,17 +81,20 @@ class FolderWatcher(QObject):
             
         logger.info(f"Starting FolderWatcher on {self.folder_path}")
         
-        event_handler = DebouncedEventHandler(self._emit_signal, self.debounce_seconds)
+        self._handler = DebouncedEventHandler(self._emit_signal, self.debounce_seconds)
         self.observer = Observer()
-        self.observer.schedule(event_handler, str(self.folder_path), recursive=False)
+        self.observer.schedule(self._handler, str(self.folder_path), recursive=False)
         self.observer.start()
         
     def stop(self):
         if self.observer is not None:
             logger.info(f"Stopping FolderWatcher on {self.folder_path}")
             self.observer.stop()
-            self.observer.join()
+            self.observer.join(timeout=5)
             self.observer = None
+        if self._handler is not None:
+            self._handler.cancel()
+            self._handler = None
             
     def _emit_signal(self):
         # Must be called from the timer thread, safely emits to Qt event loop

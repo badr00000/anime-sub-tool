@@ -5,54 +5,45 @@ PySide6 QMainWindow with step-based navigation (Input → Preview → Processing
 Background work runs in QThread with Signal/Slot communication.
 """
 
+import os
+import subprocess
 import sys
-import time
+from pathlib import Path
+
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QStackedWidget, QVBoxLayout, QWidget,
-    QHBoxLayout, QPushButton, QMessageBox, QMenuBar, QMenu, QStatusBar,
-    QCheckBox, QLabel, QFrame
+    QHBoxLayout, QPushButton, QStatusBar, QCheckBox,
 )
 from PySide6.QtCore import QThread, Signal, Qt, QTimer
-from PySide6.QtGui import QAction, QFont
+from PySide6.QtGui import QFont, QIcon
 
+from core.config import load_config
+from core.constants import (
+    APP_NAME, APP_VERSION, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH,
+    MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH,
+)
+from core.engine import ProcessingEngine
+from core.mkvtools import MKVToolsWrapper
+from core.models import AppConfig
+from gui.dialogs import messages
+from gui.dialogs.about_dialog import AboutDialog
+from gui.dialogs.settings_dialog import SettingsDialog
 from gui.theme import Colors, add_glow, apply_palette, get_stylesheet, page_header
+from gui.widgets.folder_picker import FolderPicker
+from gui.widgets.log_panel import LogPanel
+from gui.widgets.options_panel import OptionsPanel
+from gui.widgets.preview_panel import PreviewPanel
+from gui.widgets.progress_panel import ProgressPanel
+from gui.widgets.results_panel import ResultsPanel
 from gui.widgets.sidebar import Sidebar
 from gui.widgets.sync_page import SyncPage
-from gui.widgets.folder_picker import FolderPicker
-from gui.widgets.series_input import SeriesInput
-from gui.widgets.preview_panel import PreviewPanel
-from gui.widgets.options_panel import OptionsPanel
-from gui.widgets.progress_panel import ProgressPanel
-from gui.widgets.log_panel import LogPanel
-from gui.widgets.results_panel import ResultsPanel
-from gui.dialogs.settings_dialog import SettingsDialog
-from gui.dialogs.about_dialog import AboutDialog
+from utils.logger import get_logger, setup_logging
+from utils.paths import resource_path
 
-try:
-    from core.models import AppConfig, ProcessingOptions, ScanResult, BatchResult
-    from core.config import load_config, save_config
-    from core.engine import ProcessingEngine
-    from core.constants import (
-        MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT,
-        DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT,
-        APP_NAME, APP_VERSION
-    )
-    HAS_CORE = True
-except ImportError:
-    HAS_CORE = False
-    AppConfig = None
-    ProcessingOptions = None
-    ScanResult = None
-    BatchResult = None
-    load_config = None
-    save_config = None
-    ProcessingEngine = None
-    MIN_WINDOW_WIDTH = 900
-    MIN_WINDOW_HEIGHT = 650
-    DEFAULT_WINDOW_WIDTH = 1100
-    DEFAULT_WINDOW_HEIGHT = 750
-    APP_NAME = "Anime Subtitle Automation Tool"
-    APP_VERSION = "2.0.0"
+logger = get_logger(__name__)
+
+# How long closing the window waits for background work to stop
+_QUIT_WAIT_MS = 15000
 
 
 class ScanWorker(QThread):
@@ -60,19 +51,19 @@ class ScanWorker(QThread):
     completed = Signal(object)
     error = Signal(str)
 
-    def __init__(self, folder_path: str, series_name: str):
+    def __init__(self, folder_path: str, config: AppConfig, auto: bool = False):
         super().__init__()
         self.folder_path = folder_path
-        self.series_name = series_name
+        self.config = config
+        # True when the watcher started this scan: no dialogs, the user did not ask for it
+        self.auto = auto
 
     def run(self):
         try:
-            if not ProcessingEngine:
-                raise RuntimeError("Core engine not available. Check installation.")
-            engine = ProcessingEngine()
-            result = engine.scan_and_match(self.folder_path, self.series_name)
-            self.completed.emit(result)
+            engine = ProcessingEngine(self.config)
+            self.completed.emit(engine.scan_and_match(self.folder_path))
         except Exception as e:
+            logger.exception("Scan failed")
             self.error.emit(str(e))
 
 
@@ -83,52 +74,42 @@ class ProcessWorker(QThread):
     completed = Signal(object)                 # BatchResult
     error = Signal(str)
 
-    def __init__(self, scan_result, options):
+    def __init__(self, scan_result, options, config: AppConfig):
         super().__init__()
         self.scan_result = scan_result
         self.options = options
-        self._start_time = 0
-        self._engine = None
+        # Created here, not in run(), so cancel() works from the first moment
+        self._engine = ProcessingEngine(config)
 
-    def cancel(self):
-        if self._engine is not None:
-            self._engine.cancel()
+    def cancel(self, force: bool = False):
+        self._engine.cancel(force=force)
 
     def run(self):
         try:
-            if not ProcessingEngine:
-                raise RuntimeError("Core engine not available.")
-
-            engine = ProcessingEngine()
-            self._engine = engine
-            self._start_time = time.time()
-            self._processed = 0
-            total = len(self.scan_result.matches)
-
             def progress_cb(episode_num, file_progress, overall_progress):
-                """Called by batch processor with per-episode progress."""
                 self.progress_updated.emit(overall_progress, 100, f"Episode {episode_num}")
 
             def log_cb(msg, level="INFO"):
-                """Called by batch processor with log messages."""
                 self.log_message.emit(msg, level)
 
-            result = engine.process_batch(
+            result = self._engine.process_batch(
                 self.scan_result, self.options, progress_cb, log_cb
             )
             self.completed.emit(result)
         except Exception as e:
+            logger.exception("Batch failed")
             self.error.emit(str(e))
 
 
 class AnimeSubToolApp(QMainWindow):
     """Main application window with step-based wizard navigation."""
 
-    def __init__(self):
+    def __init__(self, config: AppConfig | None = None):
         super().__init__()
 
-        # Load config
-        self.config = load_config() if load_config else None
+        # The one configuration object: Settings and the options panel (presets)
+        # both edit and save this same instance.
+        self.config = config if config is not None else load_config()
 
         # Window setup
         self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
@@ -147,7 +128,10 @@ class AnimeSubToolApp(QMainWindow):
         # State
         self.scan_result = None
         self._scan_worker = None
+        self._rescan_pending = False
         self._process_worker = None
+        self._last_options = None
+        self.watcher = None
 
         # Build UI
         self._setup_ui()
@@ -193,18 +177,14 @@ class AnimeSubToolApp(QMainWindow):
         self.folder_picker = FolderPicker()
         self.folder_picker.path_changed.connect(self._on_path_changed)
 
-        self.series_input = SeriesInput()
-        self.series_input.auto_detect_requested.connect(self._auto_detect_series)
-
         self.watch_cb = QCheckBox("Watch folder — rescan automatically when new files arrive")
         self.watch_cb.toggled.connect(self._toggle_watcher)
-        self.watcher = None
 
         self.scan_btn = QPushButton("SCAN FOLDER  ▸")
         self.scan_btn.setObjectName("primaryButton")
         self.scan_btn.setFixedSize(230, 48)
         self.scan_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.scan_btn.clicked.connect(self._run_scan)
+        self.scan_btn.clicked.connect(lambda: self._run_scan())
         add_glow(self.scan_btn, Colors.blue, 28)
 
         actions = QHBoxLayout()
@@ -216,7 +196,6 @@ class AnimeSubToolApp(QMainWindow):
             "SELECT SOURCE", "Pick the folder that holds the season's episodes and its subtitle files."))
         s1_layout.addSpacing(8)
         s1_layout.addWidget(self.folder_picker)
-        s1_layout.addWidget(self.series_input)
         s1_layout.addStretch(1)
         s1_layout.addLayout(actions)
 
@@ -227,7 +206,7 @@ class AnimeSubToolApp(QMainWindow):
         s2_layout.setSpacing(14)
 
         self.preview_panel = PreviewPanel()
-        self.options_panel = OptionsPanel()
+        self.options_panel = OptionsPanel(self.config)
         self.options_panel.setFixedWidth(340)
 
         split = QHBoxLayout()
@@ -315,12 +294,49 @@ class AnimeSubToolApp(QMainWindow):
         if not self._in_sync_mode():
             self.stack.setCurrentIndex(step)
 
+    # ─── Startup / shutdown ───
+
+    def check_tools(self) -> bool:
+        """Verify once at start that mkvmerge can run; tell the user clearly when not."""
+        ok, message = MKVToolsWrapper(self.config.mkvtoolnix_path).validate_installation()
+        if ok:
+            logger.info(f"Using {message}")
+            return True
+        logger.error(message)
+        self.status_bar.showMessage("mkvmerge is not available — merging will fail")
+        messages.error(
+            self, "MKVToolNix not available",
+            f"{message}\n\nMerging needs mkvmerge. Sync Subtitle still works.\n"
+            "Fix: open Settings and clear the MKVToolNix folder to use the bundled copy, "
+            "or point it to a folder that contains mkvmerge.")
+        return False
+
+    def _batch_running(self) -> bool:
+        return self._process_worker is not None and self._process_worker.isRunning()
+
+    def _confirm_quit(self) -> bool:
+        return messages.confirm(
+            self, "Batch still running",
+            "Episodes are still being processed.\n\nStop the batch and quit? "
+            "Episodes that are not finished will be cancelled; finished ones are kept.")
+
     def closeEvent(self, event):
+        if self._batch_running():
+            if not self._confirm_quit():
+                event.ignore()
+                return
+            self._process_worker.cancel(force=True)
+            self._process_worker.wait(_QUIT_WAIT_MS)
+        if self._scan_worker is not None:
+            self._scan_worker.wait(_QUIT_WAIT_MS)
+        if self.watcher is not None:
+            self.watcher.stop()
+            self.watcher = None
         self.sync_page.shutdown()
         super().closeEvent(event)
 
     def _cancel_processing(self):
-        if self._process_worker is not None and self._process_worker.isRunning():
+        if self._batch_running():
             self._process_worker.cancel()
             self.progress_panel.cancel_btn.setEnabled(False)
             self.progress_panel.cancel_btn.setText("CANCELLING…")
@@ -329,43 +345,25 @@ class AnimeSubToolApp(QMainWindow):
 
     # ─── Step 1: Scan ───
 
-    def _auto_detect_series(self):
-        from pathlib import Path
-        from core.matcher import auto_detect_series_name, scan_folder
-
-        path = self.folder_picker.get_path()
-        if not path or not Path(path).is_dir():
-            QMessageBox.warning(self, "Warning", "Please select a folder first.")
-            return
-        videos, subtitles = scan_folder(Path(path))
-        name = auto_detect_series_name(videos + subtitles)
-        self.series_input.set_series_name(name)
-        self.status_bar.showMessage(f"Detected series name: {name}")
-
     def _on_path_changed(self, new_path: str):
         if self.watch_cb.isChecked():
             self.watch_cb.setChecked(False)
 
     def _toggle_watcher(self, checked: bool):
-        try:
-            from core.watcher import FolderWatcher
-        except ImportError:
-            QMessageBox.warning(self, "Error", "Watchdog module not installed. Run 'pip install watchdog'.")
-            self.watch_cb.setChecked(False)
-            return
+        from core.watcher import FolderWatcher
 
         if checked:
             path = self.folder_picker.get_path()
-            if not path:
-                QMessageBox.warning(self, "Warning", "Please select a folder to watch first.")
+            if not path or not Path(path).is_dir():
+                messages.warn(self, "Warning", "Please select a folder to watch first.")
                 self.watch_cb.setChecked(False)
                 return
-            
+
             if self.watcher is not None:
                 self.watcher.stop()
-            
+
             self.watcher = FolderWatcher(path)
-            self.watcher.folder_changed.connect(self._run_scan)
+            self.watcher.folder_changed.connect(self._on_folder_changed)
             self.watcher.start()
             self.status_bar.showMessage(f"Watching folder for changes: {path}")
         else:
@@ -374,172 +372,172 @@ class AnimeSubToolApp(QMainWindow):
                 self.watcher = None
                 self.status_bar.showMessage("Stopped watching folder.")
 
-    def _run_scan(self):
+    def _on_folder_changed(self):
+        self._run_scan(auto=True)
+
+    def _run_scan(self, auto: bool = False):
         # Prevent watch folder from interrupting an active processing session
         if self._merge_step >= 2:
             return
 
+        # One scan at a time: replacing a QThread that is still running destroys it
+        # mid-run and takes the whole process down. Remember the request instead.
+        if self._scan_worker is not None:
+            self._rescan_pending = True
+            return
+
         path = self.folder_picker.get_path()
-        if not path:
-            QMessageBox.warning(self, "Warning", "Please select a folder first.")
+        if not path or not Path(path).is_dir():
+            if not auto:
+                messages.warn(self, "Warning", "Please select an existing folder first.")
             return
 
         self.scan_btn.setEnabled(False)
         self.scan_btn.setText("SCANNING…")
         self.status_bar.showMessage("Scanning folder...")
 
-        series = self.series_input.get_series_name()
+        worker = ScanWorker(path, self.config, auto=auto)
+        worker.completed.connect(self._on_scan_completed)
+        worker.error.connect(self._on_scan_error)
+        worker.finished.connect(self._on_scan_finished)
+        # The reference is kept until `finished`: see _on_scan_finished
+        self._scan_worker = worker
+        worker.start()
 
-        self._scan_worker = ScanWorker(path, series)
-        self._scan_worker.completed.connect(self._on_scan_completed)
-        self._scan_worker.error.connect(self._on_scan_error)
-        self._scan_worker.start()
-
-    def _on_scan_completed(self, result):
+    def _on_scan_finished(self):
+        worker, self._scan_worker = self._scan_worker, None
+        if worker is not None:
+            worker.deleteLater()
         self.scan_btn.setEnabled(True)
         self.scan_btn.setText("SCAN FOLDER  ▸")
+        if self._rescan_pending:
+            self._rescan_pending = False
+            self._run_scan(auto=True)
+
+    def _on_scan_completed(self, result):
+        if self._merge_step >= 2:
+            return  # a batch started meanwhile; keep the scan it is working on
+        auto = bool(getattr(self.sender(), "auto", False))
         self.scan_result = result
 
-        match_count = len(result.matches)
-        self.status_bar.showMessage(f"Scan complete — {match_count} episodes matched")
+        episode_count = len(result.matches)
+        matched = sum(1 for m in result.matches if m.is_matched)
+        self.status_bar.showMessage(
+            f"Scan complete — {episode_count} episode(s), {matched} with a subtitle")
 
-        if match_count == 0:
-            QMessageBox.information(
-                self, "No Videos Found",
-                "No video files were found in the selected folder. Check that your folder "
-                "contains valid video files (.mkv)."
-            )
+        if episode_count == 0:
+            if not auto:
+                messages.info(
+                    self, "No Videos Found",
+                    "No video files were found in the selected folder. Check that your folder "
+                    "contains episode files (.mkv, .mp4, ...).")
             return
-
-        # Auto-fill series name if detected
-        if result.series_name and not self.series_input.get_series_name():
-            self.series_input.set_series_name(result.series_name)
 
         self.preview_panel.populate(result)
         self._go_to_step(1)
 
     def _on_scan_error(self, err):
-        self.scan_btn.setEnabled(True)
-        self.scan_btn.setText("SCAN FOLDER  ▸")
         self.status_bar.showMessage("Scan failed")
-        QMessageBox.critical(self, "Scan Error", f"Failed to scan folder:\n\n{err}")
+        if not getattr(self.sender(), "auto", False):
+            messages.error(self, "Scan Error", f"Failed to scan folder:\n\n{err}")
 
     # ─── Step 2: Process ───
 
     def _start_processing(self):
-        if not self.scan_result:
+        if not self.scan_result or self._batch_running():
             return
 
         options = self.options_panel.get_options()
-        if not options:
-            options = ProcessingOptions() if ProcessingOptions else None
+        self._last_options = options
 
         self._go_to_step(2)
         self.progress_panel.reset()
         self.progress_panel.cancel_btn.setEnabled(True)
         self.progress_panel.cancel_btn.setText("CANCEL")
         self.log_panel.clear()
-        self.status_bar.showMessage("Processing...")
+        self.status_bar.showMessage("Dry run..." if options.dry_run else "Processing...")
 
-        self._process_worker = ProcessWorker(self.scan_result, options)
-        self._process_worker.progress_updated.connect(
-            lambda cur, total, fname: self.progress_panel.update_progress(cur, total, fname)
-        )
-        self._process_worker.log_message.connect(self.log_panel.append_log)
-        self._process_worker.completed.connect(self._on_processing_completed)
-        self._process_worker.error.connect(self._on_processing_error)
-        self._process_worker.start()
+        worker = ProcessWorker(self.scan_result, options, self.config)
+        worker.progress_updated.connect(self.progress_panel.update_progress)
+        worker.log_message.connect(self.log_panel.append_log)
+        worker.completed.connect(self._on_processing_completed)
+        worker.error.connect(self._on_processing_error)
+        worker.finished.connect(self._on_process_finished)
+        self._process_worker = worker
+        worker.start()
+
+    def _on_process_finished(self):
+        worker, self._process_worker = self._process_worker, None
+        if worker is not None:
+            worker.deleteLater()
 
     def _on_processing_completed(self, result):
-        self.status_bar.showMessage("Processing complete!")
         self.results_panel.show_results(result)
+        self.status_bar.showMessage(self.results_panel.title.text().title())
         self._go_to_step(3)
 
     def _on_processing_error(self, err):
         self.status_bar.showMessage("Processing failed")
-        QMessageBox.critical(self, "Processing Error", f"Processing failed:\n\n{err}")
+        messages.error(self, "Processing Error", f"Processing failed:\n\n{err}")
         self._go_to_step(1)
 
     # ─── Dialogs ───
 
     def _show_settings(self):
-        if self.config:
-            dlg = SettingsDialog(self.config, self)
-            if dlg.exec():
-                # New default language/name applies right away to the options panel
-                if self.options_panel.config is not None:
-                    self.options_panel.config.subtitle_language = self.config.subtitle_language
-                    self.options_panel.config.subtitle_name = self.config.subtitle_name
-                self.options_panel.sub_lang_combo.set_value(self.config.subtitle_language)
-                self.options_panel.sub_name_edit.setText(self.config.subtitle_name)
+        dlg = SettingsDialog(self.config, self)
+        if dlg.exec():
+            # New defaults apply right away to the options panel
+            self.options_panel.apply_config_defaults()
 
     def _show_about(self):
         dlg = AboutDialog(self)
         dlg.exec()
 
-    def _open_output_folder(self):
-        import os
-        import subprocess
-        from pathlib import Path
-        
+    def output_folder(self) -> Path | None:
+        """The folder the last batch wrote to (the source folder if it was never created)."""
         if not self.scan_result or not self.scan_result.folder_path:
+            return None
+        source = Path(self.scan_result.folder_path)
+        options = self._last_options or self.options_panel.get_options()
+        output = ProcessingEngine.output_dir(self.scan_result, options)
+        return output if output.is_dir() else source
+
+    def _open_output_folder(self):
+        folder = self.output_folder()
+        if folder is None:
             return
-            
-        base_folder = Path(self.scan_result.folder_path)
-        
-        # Check if we have an output_dir from options (which we do if they process)
-        # OptionsPanel has `get_options()`, wait, let's just get the one we used for the process worker
-        # if the process_worker has options... we didn't save options to the class instance.
-        # But we can just grab current options from the panel.
-        
-        options = self.options_panel.get_options()
-        output_folder = base_folder
-        
-        if options and options.output_dir:
-            output_folder = Path(options.output_dir)
-            
-        if not output_folder.exists():
-            output_folder = base_folder
-            
-        path_str = str(output_folder)
         try:
             if sys.platform == 'win32':
-                os.startfile(path_str)
+                os.startfile(str(folder))
             elif sys.platform == 'darwin':
-                subprocess.Popen(['open', path_str])
+                subprocess.Popen(['open', str(folder)])
             else:
-                subprocess.Popen(['xdg-open', path_str])
+                subprocess.Popen(['xdg-open', str(folder)])
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"Could not open folder:\n{e}")
-
+            messages.warn(self, "Error", f"Could not open folder:\n{e}")
 
 
 def main():
     """Launch the GUI application."""
-    import ctypes
-    import os
-    from PySide6.QtGui import QIcon
+    setup_logging()
 
-    app = QApplication(sys.argv)
+    app = QApplication.instance() or QApplication(sys.argv)
     app.setStyle("Fusion")  # Cross-platform consistent style
 
     # Ensure Windows uses our custom icon in the taskbar
     if sys.platform == 'win32':
-        myappid = 'animesubtool.fluid.v3'
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-    
-    # Resolve the path to the bundled icon
-    if hasattr(sys, '_MEIPASS'):
-        icon_path = os.path.join(sys._MEIPASS, 'app_icon.ico')
-    else:
-        # Running from source, icon is in root folder
-        base_dir = Path(__file__).resolve().parent.parent
-        icon_path = str(base_dir / 'app_icon.ico')
-    
-    app.setWindowIcon(QIcon(icon_path))
+        import ctypes
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                f"AnimeSubTool.AnimeSubtitleAutomationTool.{APP_VERSION}")
+        except (AttributeError, OSError):
+            pass
+
+    app.setWindowIcon(QIcon(str(resource_path('app_icon.ico'))))
 
     window = AnimeSubToolApp()
     window.show()
+    QTimer.singleShot(0, window.check_tools)
 
     sys.exit(app.exec())
 

@@ -1,14 +1,55 @@
-"""About Dialog — Application information and credits."""
+"""About Dialog — Application information, credits and third-party licences."""
 
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLayout
+from PySide6.QtWidgets import (
+    QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QPushButton, QHBoxLayout,
+)
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 
-try:
-    from core.constants import APP_NAME, APP_VERSION
-except ImportError:
-    APP_NAME = "Anime Subtitle Automation Tool"
-    APP_VERSION = "2.0.0"
+from core.constants import APP_NAME, APP_VERSION
+from gui.theme import Colors
+from utils.paths import resource_path
+
+# Shipped next to the app (repo root from source, bundle root in the .exe)
+LICENSE_FILES = ("THIRD_PARTY_LICENSES.md", "licenses/GPL-2.0.txt")
+
+
+def load_license_text() -> str:
+    """The third-party notices followed by the full GPLv2 text, as plain text."""
+    parts = []
+    for name in LICENSE_FILES:
+        path = resource_path(*name.split("/"))
+        try:
+            parts.append(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            parts.append(f"[{name} is missing from this copy of the application.]")
+    return ("\n\n" + "=" * 72 + "\n\n").join(parts)
+
+
+class LicensesDialog(QDialog):
+    """Read-only view of the third-party licence notices."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Third-party licenses")
+        self.resize(720, 560)
+        self.setModal(True)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+
+        self.text = QPlainTextEdit()
+        self.text.setReadOnly(True)
+        self.text.setFont(QFont("Consolas", 9))
+        self.text.setPlainText(load_license_text())
+
+        close_btn = QPushButton("Close")
+        close_btn.setFixedWidth(120)
+        close_btn.clicked.connect(self.accept)
+
+        layout.addWidget(self.text, 1)
+        layout.addWidget(close_btn, 0, Qt.AlignmentFlag.AlignRight)
 
 
 class AboutDialog(QDialog):
@@ -17,7 +58,7 @@ class AboutDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"About {APP_NAME}")
-        self.setFixedSize(450, 300)
+        self.setFixedSize(450, 320)
         self.setModal(True)
 
         layout = QVBoxLayout(self)
@@ -26,45 +67,44 @@ class AboutDialog(QDialog):
 
         # Title
         title = QLabel(APP_NAME)
-        title.setStyleSheet("""
-            font-size: 24px;
-            font-weight: 800;
-            color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 #5fd6ff, stop:1 #ff2b4e);
-        """)
+        title.setStyleSheet(f"font-size: 24px; font-weight: 800; color: {Colors.blue_bright};")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setWordWrap(True)
 
         # Version
         version = QLabel(f"Version {APP_VERSION}")
-        version.setStyleSheet("font-size: 14px; color: #00b7ff; font-weight: bold;")
+        version.setStyleSheet(f"font-size: 14px; color: {Colors.blue}; font-weight: bold;")
         version.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Description
         desc = QLabel(
-            "An intelligent automation tool for matching, embedding,\n"
-            "and standardizing anime subtitles and audio tracks.\n\n"
-            "Powered by MKVToolNix, Anitopy, and PySide6."
+            "Matches anime episodes with their subtitle files, merges them\n"
+            "with mkvmerge and cleans up audio and subtitle tracks.\n\n"
+            "Uses MKVToolNix (GPLv2), Qt / PySide6 (LGPLv3), anitopy,\n"
+            "RapidFuzz, click, watchdog and charset-normalizer."
         )
-        desc.setStyleSheet("font-size: 13px; color: #9db0c6; line-height: 1.5;")
+        desc.setStyleSheet(f"font-size: 13px; color: {Colors.text_secondary};")
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Author / Credits
-        credits = QLabel("Designed for AI Development Team Workflow")
-        credits.setStyleSheet("font-size: 12px; color: #55667c; font-style: italic;")
-        credits.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # Button
+        # Buttons
         btn_layout = QHBoxLayout()
+        self.licenses_btn = QPushButton("Licenses")
+        self.licenses_btn.setFixedWidth(120)
+        self.licenses_btn.clicked.connect(self._show_licenses)
         close_btn = QPushButton("Close")
         close_btn.setFixedWidth(120)
         close_btn.clicked.connect(self.accept)
-        btn_layout.addWidget(close_btn, 0, Qt.AlignmentFlag.AlignCenter)
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.licenses_btn)
+        btn_layout.addWidget(close_btn)
+        btn_layout.addStretch()
 
         layout.addWidget(title)
         layout.addWidget(version)
         layout.addSpacing(10)
         layout.addWidget(desc)
         layout.addStretch()
-        layout.addWidget(credits)
-        layout.addSpacing(10)
         layout.addLayout(btn_layout)
+
+    def _show_licenses(self):
+        LicensesDialog(self).exec()
