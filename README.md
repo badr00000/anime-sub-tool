@@ -133,6 +133,11 @@ The result is one file, `dist/AnimeSubTool.exe`, containing Python, Qt and
 `mkvmerge`. Copy it anywhere and double-click it. The first launch takes a few
 seconds because the bundle unpacks itself to a temporary folder.
 
+## License
+
+This project's own code is released under the [MIT License](LICENSE).
+The bundled third-party programs and libraries keep their own licences (below).
+
 ## Third-party software and licenses
 
 This tool bundles and uses third-party software, each under its own licence:
