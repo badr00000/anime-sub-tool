@@ -160,3 +160,61 @@ def test_scan_folder_returns_absolute_paths(tmp_path, monkeypatch):
     videos, subs = scan_folder(Path("."))
     assert videos[0].filepath.is_absolute() and subs[0].filepath.is_absolute()
     assert videos[0].filepath == (tmp_path / "@Show - 01.mkv").resolve()
+
+
+# ── R2-07: extra markers only count next to the number or in a bracket ────────
+
+@pytest.mark.parametrize("name", [
+    "Menu Show - 02", "Trailer Park Boys - 02", "Ed Edd n Eddy - 02", "Happy Ending - 01",
+    "Opening Night - 01", "Special A - 03", "One Piece - 1000", "Edens Zero - 05",
+    "Speed Grapher - 01",
+])
+def test_marker_words_in_a_title_are_not_extras(name):
+    assert info(name + ".mkv").extra_kind == ""
+    matches, unmatched_v, unmatched_s = match([name + ".mkv"], [name + ".srt"])
+    assert matches[0].subtitle.filename == name + ".srt"
+    assert matches[0].confidence == MatchConfidence.EXACT
+    assert not unmatched_v and not unmatched_s
+
+
+@pytest.mark.parametrize("name, kind", [
+    ("Show - NCOP1.mkv", "NCOP"), ("[G] Show - OP 01.mkv", "OP"), ("Show - ED2.mkv", "ED"),
+    ("[G] Show - 05 [Creditless OP].mkv", "NCOP"), ("[G] Show - 01 [NCOP].mkv", "NCOP"),
+    ("Show - 01 (NCED).mkv", "NCED"), ("Show - Preview 03.mkv", "PREVIEW"),
+    ("Show - PV1.mkv", "PV"), ("Show - CM 02.mkv", "CM"), ("Show - SP1.mkv", "SPECIAL"),
+    ("Show OVA - 01.mkv", "OVA"), ("Show - OP.mkv", "OP"),
+])
+def test_extra_markers_next_to_the_number_or_in_brackets(name, kind):
+    assert info(name).extra_kind == kind
+
+
+def test_group_tags_are_not_extra_markers():
+    for name in ("[Specials] Show - 01.srt", "[PV-Subs] Show - 01.srt"):
+        assert info(name).extra_kind == ""
+    matches, _, unmatched_s = match(["Show - 01.mkv"], ["[Specials] Show - 01.srt"])
+    assert matches[0].subtitle.filename == "[Specials] Show - 01.srt" and not unmatched_s
+    matches, _, _ = match(["Show - 01.mkv"], ["[PV-Subs] Show - 01.srt"])
+    assert matches[0].subtitle.filename == "[PV-Subs] Show - 01.srt"
+
+
+def test_extra_pairs_with_the_same_kind_and_number():
+    matches, unmatched_v, unmatched_s = match(
+        ["Show - NCOP1.mkv", "Show - 01.mkv"], ["Show - 01.srt", "Show - NCOP1.srt"])
+    by_video = {m.video.filename: m.subtitle.filename for m in matches}
+    assert by_video == {"Show - NCOP1.mkv": "Show - NCOP1.srt", "Show - 01.mkv": "Show - 01.srt"}
+    assert not unmatched_v and not unmatched_s
+    # Another kind or number does not pair
+    matches, _, _ = match(["Show - NCOP1.mkv"], ["Show - NCED1.srt"])
+    assert matches[0].subtitle is None
+    matches, _, _ = match(["Show - NCOP1.mkv"], ["Show - NCOP2.srt"])
+    assert matches[0].subtitle is None
+
+
+def test_scan_ignores_partial_and_marked_files_of_any_kind(tmp_path):
+    touch(tmp_path, "Show - 01.mkv", "Show - 01.srt",
+          f"Show - 01 {OUTPUT_MARKER}.mkv.partial.srt",       # old UTF-16 temp copy
+          f"Show - 01 {OUTPUT_MARKER}.mkv.partial",
+          "Show - 01.mkv.partial", f"Show - 01 {OUTPUT_MARKER}.srt")
+    videos, subs = list_media_files(tmp_path)
+    assert [v.name for v in videos] == ["Show - 01.mkv"]
+    assert [s.name for s in subs] == ["Show - 01.srt"]

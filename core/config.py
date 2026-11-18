@@ -115,15 +115,47 @@ def clean_preset(raw: Any) -> dict:
     return clean
 
 
+# The preset list always starts with this built-in entry; no saved preset may use it.
+DEFAULT_PRESET_NAME = "Default"
+
+
+def is_reserved_preset_name(name: str) -> bool:
+    return name.strip().casefold() == DEFAULT_PRESET_NAME.casefold()
+
+
 def _clean_presets(value: Any):
     if not isinstance(value, dict):
         return None
-    return {name: clean_preset(preset) for name, preset in value.items()
-            if isinstance(name, str) and name and isinstance(preset, dict)}
+    presets = {}
+    for name, preset in value.items():
+        if not (isinstance(name, str) and name.strip() and isinstance(preset, dict)):
+            continue
+        name = name.strip()
+        if is_reserved_preset_name(name):
+            # A preset saved as 'Default' would hide behind the built-in entry
+            base, n = f"{DEFAULT_PRESET_NAME} (saved)", 2
+            name = base
+            while name in value or name in presets:
+                name, n = f"{base} {n}", n + 1
+        presets[name] = clean_preset(preset)
+    return presets
+
+
+# What the previous version stored as its default MKVToolNix folder. Kept in an
+# old config.json it would override the bundled mkvmerge, so it reads as empty.
+_OLD_DEFAULT_MKVTOOLNIX = r"c:\program files\mkvtoolnix"
+
+
+def _as_mkvtoolnix_path(value: Any):
+    if not isinstance(value, str):
+        return None
+    if value.strip().rstrip("\\/").lower() == _OLD_DEFAULT_MKVTOOLNIX:
+        return ""
+    return value
 
 
 _CONFIG_FIELDS = {
-    "mkvtoolnix_path": _as_str,
+    "mkvtoolnix_path": _as_mkvtoolnix_path,
     "default_workers": _as_workers,
     "output_subfolder": _as_subfolder,
     "subtitle_language": lambda v: v.strip() if isinstance(v, str) and v.strip() else None,

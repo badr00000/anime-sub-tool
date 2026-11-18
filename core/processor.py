@@ -1,4 +1,7 @@
 import os
+import shutil
+import tempfile
+import threading
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
@@ -10,7 +13,10 @@ from core.models import (
     EpisodeMatch, EpisodePreview, PreviewOperation, ProcessingOptions, ProcessingResult,
     ProcessingStatus, TrackType,
 )
-from core.subtitles import CHARSET_AUTO, python_codec, resolve_charset
+from core.subtitles import (
+    CHARSET_AUTO, ENCODING_UNCERTAIN, UNCERTAIN_HINT, UnknownCharsetError, detect_file_encoding,
+    python_codec, resolve_charset,
+)
 from utils.logger import get_logger
 from utils.paths import output_filename, resolve_output_dir
 
@@ -19,6 +25,11 @@ logger = get_logger(__name__)
 # mkvmerge writes here first; the file only gets its real name once it is complete,
 # so a failed or interrupted run never leaves something that looks like a finished episode.
 _PARTIAL_SUFFIX = ".partial"
+
+
+def partial_path_for(output_path: Path) -> Path:
+    """The temporary name mkvmerge writes `output_path` under."""
+    return output_path.with_name(output_path.name + _PARTIAL_SUFFIX)
 
 
 def _same_path(a: Path, b: Path) -> bool:
@@ -77,16 +88,23 @@ class EpisodeProcessor:
                         "(enable 'Overwrite existing output files' to replace it)")
         return None
 
+    def _auto_charset(self) -> bool:
+        return (self.options.subtitle_charset or "").strip().lower() in ("", CHARSET_AUTO)
+
     def _inspect_subtitle(self, sub_path: Path) -> tuple[Optional[str], list[str]]:
         """(error, warnings) for the subtitle about to be merged."""
         if sub_path.suffix.lower() not in TEXT_SUBTITLE_EXTENSIONS:
             return None, []
         try:
+            resolve_charset(sub_path, self.options.subtitle_charset)
+        except UnknownCharsetError as e:
+            return f"{e} Pick one from the Encoding list.", []
+        try:
             sub = subtitle_file.load(sub_path)
         except OSError as e:
             return f"Could not read subtitle {sub_path.name}: {e}", []
         except ValueError as e:
-            if (self.options.subtitle_charset or "").strip().lower() not in ("", CHARSET_AUTO):
+            if not self._auto_charset():
                 return None, []   # the user named the encoding; let mkvmerge judge the file
             return str(e), []
         if not sub.cues:
@@ -94,6 +112,9 @@ class EpisodeProcessor:
                     "(empty or damaged file); nothing was merged."), []
 
         warnings = []
+        if sub.encoding == ENCODING_UNCERTAIN and self._auto_charset():
+            warnings.append(f"{sub_path.name}: {UNCERTAIN_HINT}. It was merged unconverted, so "
+                            "its text may show as garbage; pick the encoding and run it again.")
         clamped = subtitle_file.count_clamped(sub, self.options.subtitle_offset_ms)
         if clamped:
             warnings.append(
@@ -103,7 +124,10 @@ class EpisodeProcessor:
 
     # ── processing ──
 
-    def process(self, match: EpisodeMatch, progress_callback: Optional[Callable[[int], None]] = None) -> ProcessingResult:
+    def process(self, match: EpisodeMatch, progress_callback: Optional[Callable[[int], None]] = None,
+                cancel_event: Optional[threading.Event] = None) -> ProcessingResult:
+        """Merge one episode. `cancel_event` set before a mkvmerge run starts cancels
+        the episode (checked by the wrapper right before each start)."""
         blocked = self._precheck(match)
         if blocked:
             return blocked
@@ -119,7 +143,10 @@ class EpisodeProcessor:
                 return ProcessingResult(status=ProcessingStatus.FAILED, output_path=output_path, message=error)
 
         # 1. Identify tracks
-        file_info = self.mkv_tools.identify(str(video_path))
+        file_info = self.mkv_tools.identify(str(video_path), cancel_event=cancel_event)
+        if getattr(file_info, "cancelled", False):
+            return ProcessingResult(status=ProcessingStatus.CANCELLED, output_path=output_path,
+                                    message="Cancelled")
         if file_info.error:
             return ProcessingResult(status=ProcessingStatus.FAILED, output_path=output_path,
                                     message=file_info.error)
@@ -169,48 +196,53 @@ class EpisodeProcessor:
         except OSError as e:
             return ProcessingResult(status=ProcessingStatus.FAILED, output_path=output_path,
                                     message=f"Could not create the output folder {output_path.parent}: {e}")
-        partial_path = output_path.with_name(output_path.name + _PARTIAL_SUFFIX)
+        partial_path = partial_path_for(output_path)
 
         # 5. Execute mkvmerge
         sub_charset = resolve_charset(sub_path, self.options.subtitle_charset) if sub_path else None
         merge_sub_path = sub_path
-        temp_sub_path = None
-        if sub_path and sub_charset in ("UTF-16LE", "UTF-16BE"):
-            # mkvmerge cannot even recognise a UTF-16 subtitle that has no BOM, so it
-            # gets a UTF-8 copy (written next to the output, removed afterwards).
-            temp_sub_path = output_path.with_name(output_path.name + _PARTIAL_SUFFIX + sub_path.suffix)
-            try:
-                codec = python_codec("utf-16-le" if sub_charset == "UTF-16LE" else "utf-16-be")
-                text = sub_path.read_bytes().decode(codec, errors="replace")
-                with open(temp_sub_path, "w", encoding="utf-8-sig", newline="") as f:
-                    f.write(text)
-            except OSError as e:
-                return ProcessingResult(status=ProcessingStatus.FAILED, output_path=output_path,
-                                        message=f"Could not convert subtitle {sub_path.name}: {e}")
-            merge_sub_path, sub_charset = temp_sub_path, None
+        temp_dir = None
+        try:
+            if sub_path and sub_charset in ("UTF-16LE", "UTF-16BE"):
+                # mkvmerge cannot even recognise a UTF-16 subtitle that has no BOM, so it
+                # gets a UTF-8 copy. The copy lives in a private temp folder, never next
+                # to the episodes, where a leftover could be scanned as a subtitle.
+                try:
+                    temp_dir = Path(tempfile.mkdtemp(prefix="animesubtool-"))
+                    merge_sub_path = temp_dir / ("subtitle" + sub_path.suffix.lower())
+                    codec = python_codec("utf-16-le" if sub_charset == "UTF-16LE" else "utf-16-be")
+                    text = sub_path.read_bytes().decode(codec, errors="replace")
+                    with open(merge_sub_path, "w", encoding="utf-8-sig", newline="") as f:
+                        f.write(text)
+                except OSError as e:
+                    return ProcessingResult(status=ProcessingStatus.FAILED, output_path=output_path,
+                                            message=f"Could not convert subtitle {sub_path.name}: {e}")
+                sub_charset = None
 
-        result = self.mkv_tools.merge(
-            video_path=str(video_path),
-            output_path=str(partial_path),
-            subtitle_path=str(merge_sub_path) if merge_sub_path else None,
-            audio_track_ids=audio_track_ids,
-            sub_track_ids=sub_track_ids,
-            sub_language=self.options.subtitle_language,
-            sub_name=self.options.subtitle_name,
-            sub_default=self.options.set_default,
-            edit_track_id=edited_track_id,
-            edit_new_lang=self.options.edit_new_lang,
-            edit_new_name=self.options.edit_new_name,
-            sub_offset_ms=self.options.subtitle_offset_ms,
-            sub_charset=sub_charset,
-            progress_callback=progress_callback
-        )
+            result = self.mkv_tools.merge(
+                video_path=str(video_path),
+                output_path=str(partial_path),
+                subtitle_path=str(merge_sub_path) if merge_sub_path else None,
+                audio_track_ids=audio_track_ids,
+                sub_track_ids=sub_track_ids,
+                sub_language=self.options.subtitle_language,
+                sub_name=self.options.subtitle_name,
+                sub_default=self.options.set_default,
+                edit_track_id=edited_track_id,
+                edit_new_lang=self.options.edit_new_lang,
+                edit_new_name=self.options.edit_new_name,
+                sub_offset_ms=self.options.subtitle_offset_ms,
+                sub_charset=sub_charset,
+                progress_callback=progress_callback,
+                cancel_event=cancel_event,
+            )
+        finally:
+            if temp_dir is not None:
+                shutil.rmtree(temp_dir, ignore_errors=True)
 
         result.output_path = output_path
         result.warnings = pre_warnings + list(result.warnings)
         try:
-            if temp_sub_path is not None and temp_sub_path.exists():
-                temp_sub_path.unlink()
             if result.is_success:
                 if partial_path.exists():
                     os.replace(partial_path, output_path)
@@ -222,6 +254,12 @@ class EpisodeProcessor:
         except OSError as e:
             result.status = ProcessingStatus.FAILED
             result.message = f"Could not finish writing {output_path.name}: {e}"
+            # The complete file could not take its real name (target read-only or
+            # open in a player); a stray .partial would only waste space.
+            try:
+                partial_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         return result
 
     def dry_run(self, match: EpisodeMatch) -> ProcessingResult:
@@ -274,9 +312,16 @@ class EpisodeProcessor:
             if offset:
                 direction = "later (delay)" if offset > 0 else "earlier"
                 operations.append(PreviewOperation(action="Shift Subtitle", target=f"{abs(offset) / 1000:g}s {direction}"))
-            charset = resolve_charset(match.subtitle.filepath, self.options.subtitle_charset)
+            try:
+                charset = resolve_charset(match.subtitle.filepath, self.options.subtitle_charset)
+            except UnknownCharsetError as e:
+                charset = None
+                operations.append(PreviewOperation(action="⚠ Encoding", target=str(e)))
             if charset:
                 operations.append(PreviewOperation(action="Convert Encoding", target=f"{charset} → UTF-8"))
+            elif self._auto_charset() and match.subtitle.filepath.suffix.lower() in TEXT_SUBTITLE_EXTENSIONS:
+                if detect_file_encoding(match.subtitle.filepath) == ENCODING_UNCERTAIN:
+                    operations.append(PreviewOperation(action="⚠ Encoding", target=UNCERTAIN_HINT))
 
         if self.options.edit_target_lang:
             iso_text = " (and isolating it)" if self.options.isolate_edited_track else ""

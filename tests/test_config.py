@@ -145,3 +145,47 @@ def test_logging_goes_to_one_rotating_file():
             root.removeHandler(handler)
             handler.close()
         root.propagate = True
+
+
+# ── R2-09: a preset named 'Default' ───────────────────────────────────────────
+
+def test_preset_named_default_is_renamed_on_load():
+    write_raw(json.dumps({"presets": {
+        "Default": {"workers": 2}, "default ": {"workers": 3}, "Mine": {"workers": 5},
+        "Default (saved)": {"workers": 6}}}).encode())
+    presets = load_config().presets
+    assert not any(cfg.is_reserved_preset_name(name) for name in presets)
+    assert presets["Mine"] == {"workers": 5}
+    assert presets["Default (saved)"] == {"workers": 6}          # an existing name is kept
+    renamed = {name: p for name, p in presets.items() if name.startswith("Default (saved) ")}
+    assert sorted(p["workers"] for p in renamed.values()) == [2, 3]
+
+
+# ── R2-11: settings left by the previous version ──────────────────────────────
+
+@pytest.mark.parametrize("old", [r"C:\Program Files\MKVToolNix", "C:\\Program Files\\MKVToolNix\\",
+                                 r"c:\program files\mkvtoolnix"])
+def test_old_default_mkvtoolnix_folder_means_bundled(old):
+    write_raw(json.dumps({"mkvtoolnix_path": old, "default_workers": 3}).encode())
+    config = load_config()
+    assert config.mkvtoolnix_path == "" and config.default_workers == 3
+
+
+def test_other_mkvtoolnix_folders_are_kept():
+    write_raw(json.dumps({"mkvtoolnix_path": r"D:\Tools\MKVToolNix"}).encode())
+    assert load_config().mkvtoolnix_path == r"D:\Tools\MKVToolNix"
+
+
+def test_old_session_logs_are_deleted_on_startup():
+    log_dir = get_app_data_dir() / "logs"
+    log_dir.mkdir(parents=True)
+    for name in ("session_20250101_120000.log", "session_x.log"):
+        (log_dir / name).write_text("old")
+    (log_dir / "keep.txt").write_text("other")
+    try:
+        setup_logging()
+        assert sorted(p.name for p in log_dir.iterdir()) == ["keep.txt"]
+    finally:
+        for handler in list(get_logger().handlers):
+            get_logger().removeHandler(handler)
+            handler.close()

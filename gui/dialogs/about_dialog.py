@@ -10,12 +10,14 @@ from core.constants import APP_NAME, APP_VERSION
 from gui.theme import Colors
 from utils.paths import resource_path
 
-# Shipped next to the app (repo root from source, bundle root in the .exe)
-LICENSE_FILES = ("THIRD_PARTY_LICENSES.md", "licenses/GPL-2.0.txt")
+# Shipped next to the app (repo root from source, bundle root in the .exe):
+# the app's own licence first, then the third-party notices and the GPLv2 text.
+LICENSE_FILES = ("LICENSE", "THIRD_PARTY_LICENSES.md", "licenses/GPL-2.0.txt")
 
 
 def load_license_text() -> str:
-    """The third-party notices followed by the full GPLv2 text, as plain text."""
+    """The app's own licence, the third-party notices and the full GPLv2 text,
+    as plain text."""
     parts = []
     for name in LICENSE_FILES:
         path = resource_path(*name.split("/"))
@@ -27,11 +29,11 @@ def load_license_text() -> str:
 
 
 class LicensesDialog(QDialog):
-    """Read-only view of the third-party licence notices."""
+    """Read-only view of the licence texts."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Third-party licenses")
+        self.setWindowTitle("Licenses")
         self.resize(720, 560)
         self.setModal(True)
 
@@ -81,7 +83,7 @@ class AboutDialog(QDialog):
             "Matches anime episodes with their subtitle files, merges them\n"
             "with mkvmerge and cleans up audio and subtitle tracks.\n\n"
             "Uses MKVToolNix (GPLv2), Qt / PySide6 (LGPLv3), anitopy,\n"
-            "RapidFuzz, click, watchdog and charset-normalizer."
+            "RapidFuzz, click and watchdog."
         )
         desc.setStyleSheet(f"font-size: 13px; color: {Colors.text_secondary};")
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)

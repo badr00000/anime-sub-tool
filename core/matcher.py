@@ -10,7 +10,7 @@ except ImportError:
 
 from rapidfuzz import fuzz
 from core.models import EpisodeInfo, EpisodeMatch, MatchConfidence
-from core.constants import VIDEO_EXTENSIONS, SUBTITLE_EXTENSIONS, EPISODE_PATTERNS
+from core.constants import EPISODE_PATTERNS, OUTPUT_MARKER, SUBTITLE_EXTENSIONS, VIDEO_EXTENSIONS
 from utils.logger import get_logger
 from utils.paths import is_tool_output
 
@@ -29,19 +29,32 @@ _NON_EPISODE_NUMBERS = re.compile(
 )
 
 
-# Extras that are never an episode: a file such as 'Show - NCOP1.mkv' must not
-# receive the subtitle of episode 1.
-_NEVER_MATCHED_KINDS = frozenset({"NCOP", "NCED", "OP", "ED", "PV", "PREVIEW", "CM", "MENU", "TRAILER"})
-# Extras that are numbered like episodes but are a separate run: 'Show OVA - 01'
-# only pairs with a subtitle that is also marked OVA.
-_SEPARATE_RUN_KINDS = frozenset({"OVA", "SPECIAL"})
+# Kinds of extras. Each pairs only with a subtitle of the same kind and number:
+# 'Show - NCOP1.mkv' never receives the subtitle of episode 1, 'Show OVA - 01'
+# only takes a subtitle that is also marked OVA.
 _KIND_ALIASES = {
     "OPENING": "OP", "ENDING": "ED", "OAD": "OVA", "OAV": "OVA", "SP": "SPECIAL",
-    "SPECIALS": "SPECIAL", "CREDITLESS": "NCOP",
+    "SPECIALS": "SPECIAL", "CREDITLESS": "NCOP", "CREDITLESSOP": "NCOP",
+    "CREDITLESSED": "NCED",
 }
-# What anitopy does not classify itself
-_EXTRA_WORDS = re.compile(
-    r'(?<![A-Za-z])(NC[ ._-]?OP|NC[ ._-]?ED|Creditless|Menu|Trailer)(?![a-z])', re.IGNORECASE)
+# Short markers count only in capitals ('Ed Edd n Eddy' is a title, 'ED2' is not)
+_EXTRA_KEYWORD = (
+    r'(?<![A-Za-z])(?:'
+    r'(?i:NC[ ._-]?OP|NC[ ._-]?ED|Creditless(?:[ ._-]?(?:OP|ED))?|Opening|Ending|Preview'
+    r'|Menu|Trailer|Specials?|OVA|OAD|OAV)'
+    r'|OP|ED|PV|CM|SP)(?![A-Za-z])'
+)
+_KEYWORD = re.compile(_EXTRA_KEYWORD)
+# Separate runs are numbered 'Show OVA - 01'; for the others ('Happy Ending - 01',
+# 'Opening Night - 01') only a number glued to the word counts ('OP1', 'OP 01').
+_SEPARATE_RUN_NUMBER = re.compile(r'[ ._]*-?[ ._]*\d')
+_ATTACHED_NUMBER = re.compile(r'[ ._-]?\d')
+_AFTER_EPISODE_DASH = re.compile(r'\s-\s*$')
+# A bracket holding nothing but a marker: '[OP]', '(NCED 2)', '[Creditless OP]'
+_BRACKET = re.compile(r'[\[(]([^\[\]()]*)[\])]')
+_MARKER_ONLY = re.compile(r'^\s*(?:' + _EXTRA_KEYWORD + r')(?:[ ._-]?\d+)?'
+                          r'(?:\s+(?:' + _EXTRA_KEYWORD + r'))?\s*$')
+
 _SEASON_PATTERNS = (
     re.compile(r'(?<![A-Za-z0-9])S(\d{1,2})E\d{1,4}', re.IGNORECASE),
     re.compile(r'(?<![A-Za-z])Season[ ._-]?(\d{1,2})(?!\d)', re.IGNORECASE),
@@ -77,18 +90,34 @@ def _first(value):
     return value
 
 
-def _extra_kind(filename: str, anime_type) -> str:
-    """'' for a normal episode, else the normalised kind of extra."""
-    types = anime_type if isinstance(anime_type, (list, tuple)) else [anime_type]
-    kinds = [str(t).strip().upper() for t in types if t]
-    word = _EXTRA_WORDS.search(filename)
-    if word:
-        kinds.append(re.sub(r'[ ._-]', '', word.group(1).upper()))
-    kinds = [_KIND_ALIASES.get(k, k) for k in kinds]
-    for group in (_NEVER_MATCHED_KINDS, _SEPARATE_RUN_KINDS):
-        for kind in kinds:
-            if kind in group:
-                return kind
+def _kind_name(word: str) -> str:
+    key = re.sub(r'[ ._-]', '', word.upper())
+    return _KIND_ALIASES.get(key, key)
+
+
+def _extra_kind(stem: str) -> str:
+    """'' for a normal episode, else the normalised kind of extra.
+
+    A marker word only counts next to a number ('NCOP1', 'OP 01', 'OVA - 02'),
+    right after the episode dash ('Show - OP'), or alone in a bracket that is not
+    the leading group tag ('- 05 [Creditless OP]'). The same words inside a
+    title ('Happy Ending - 01', 'Special A - 03', '[Specials] Show - 01') do not.
+    """
+    leading = len(stem) - len(stem.lstrip())
+    for bracket in _BRACKET.finditer(stem):
+        if bracket.start() == leading:
+            continue        # '[Group]' / '[Specials]' release tag
+        if _MARKER_ONLY.match(bracket.group(1)):
+            words = _KEYWORD.findall(bracket.group(1))
+            return _kind_name(" ".join(words) if len(words) > 1 else words[0])
+    # Outside brackets
+    plain = _BRACKET.sub(lambda m: " " * len(m.group(0)), stem)
+    for match in _KEYWORD.finditer(plain):
+        kind = _kind_name(match.group(0))
+        after, before = plain[match.end():], plain[:match.start()]
+        number = _SEPARATE_RUN_NUMBER if kind in ("OVA", "SPECIAL") else _ATTACHED_NUMBER
+        if number.match(after) or _AFTER_EPISODE_DASH.search(before):
+            return kind
     return ""
 
 
@@ -120,17 +149,16 @@ def extract_episode_info(filepath: Path) -> EpisodeInfo:
     episode_num = None
     series_title = None
     season = None
-    anime_type = None
 
     if HAS_ANITOPY:
+        # anitopy's anime_type is not used: it calls 'Happy Ending' an ending
         parsed = anitopy.parse(parse_name) or {}
         episode_num = normalize_episode_num(parsed.get("episode_number"))
         series_title = parsed.get("anime_title")
         season = parsed.get("anime_season")
-        anime_type = parsed.get("anime_type")
 
     season = _parse_season(parse_name, season)
-    extra_kind = _extra_kind(parse_name, anime_type)
+    extra_kind = _extra_kind(parse_stem)
 
     # Fallback to regex patterns if anitopy failed or is not installed
     if not episode_num:
@@ -190,9 +218,11 @@ def list_media_files(folder_path: Path) -> tuple[list[Path], list[Path]]:
 
     for f in files:
         ext = f.suffix.lower()
+        # Unfinished or temporary files of a run ('x.mkv.partial', 'x.mkv.partial.srt')
+        # and finished outputs are never inputs, whatever their extension.
+        if ".partial" in f.name.lower() or is_tool_output(f) or OUTPUT_MARKER in f.name:
+            continue
         if ext in VIDEO_EXTENSIONS:
-            if is_tool_output(f):
-                continue
             videos.append(f)
         elif ext in SUBTITLE_EXTENSIONS:
             if ext == ".sub" and f.stem.lower() in by_ext.get(".idx", ()):
@@ -252,8 +282,9 @@ def _confidence(video: EpisodeInfo, subtitle: EpisodeInfo, score: float) -> Matc
 
 
 def _match_key(info: EpisodeInfo) -> Optional[tuple[str, str]]:
-    """Files pair up only when this key is equal; None = never paired."""
-    if not info.episode_num or info.extra_kind in _NEVER_MATCHED_KINDS:
+    """Files pair up only when this key is equal (same kind of extra, '' for an
+    episode, and same number); None = never paired."""
+    if not info.episode_num:
         return None
     return (info.extra_kind, info.episode_num)
 

@@ -42,8 +42,10 @@ from utils.paths import resource_path
 
 logger = get_logger(__name__)
 
-# How long closing the window waits for background work to stop
-_QUIT_WAIT_MS = 15000
+# Closing the window waits for background work in steps of this length, asking
+# mkvmerge to stop again after each one, until the work has really finished:
+# destroying a running QThread kills the app and can leave mkvmerge orphaned.
+_QUIT_WAIT_STEP_MS = 2000
 
 
 class ScanWorker(QThread):
@@ -325,15 +327,26 @@ class AnimeSubToolApp(QMainWindow):
             if not self._confirm_quit():
                 event.ignore()
                 return
-            self._process_worker.cancel(force=True)
-            self._process_worker.wait(_QUIT_WAIT_MS)
+            self._stop_worker(self._process_worker, cancel=True)
         if self._scan_worker is not None:
-            self._scan_worker.wait(_QUIT_WAIT_MS)
+            self._stop_worker(self._scan_worker, cancel=False)
         if self.watcher is not None:
             self.watcher.stop()
             self.watcher = None
         self.sync_page.shutdown()
         super().closeEvent(event)
+
+    @staticmethod
+    def _stop_worker(worker, cancel: bool) -> None:
+        """Block until `worker` has finished, re-sending the force cancel each step."""
+        waited = 0
+        while True:
+            if cancel:
+                worker.cancel(force=True)
+            if worker.wait(_QUIT_WAIT_STEP_MS):
+                return
+            waited += _QUIT_WAIT_STEP_MS
+            logger.warning(f"Still waiting for background work to stop ({waited // 1000} s)")
 
     def _cancel_processing(self):
         if self._batch_running():

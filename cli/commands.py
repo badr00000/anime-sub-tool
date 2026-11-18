@@ -5,6 +5,7 @@ Provides commands: process, preview, scan, shift, version
 """
 
 import click
+import math
 import sys
 import os
 import time
@@ -17,7 +18,7 @@ if sys.platform == 'win32':
             _stream.reconfigure(encoding='utf-8', errors='replace')
     os.environ.setdefault('PYTHONIOENCODING', 'utf-8')
 
-from core.config import load_config
+from core.config import _MAX_OFFSET_MS, load_config
 from core.models import ProcessingOptions
 from core.constants import (
     APP_NAME, APP_VERSION, MAX_PARALLEL_WORKERS, MIN_PARALLEL_WORKERS,
@@ -97,17 +98,41 @@ def scan(folder):
         sys.exit(1)
 
 
+# Same limit the configuration accepts for a saved offset
+_MAX_OFFSET_SECONDS = _MAX_OFFSET_MS // 1000
+
+
+def _check_offset(ctx, param, value):
+    """Reject offsets that are not a real number of seconds within one hour."""
+    if value is None:
+        return value
+    if not math.isfinite(value) or abs(value) > _MAX_OFFSET_SECONDS:
+        raise click.BadParameter(
+            f"must be a number of seconds between -{_MAX_OFFSET_SECONDS} and {_MAX_OFFSET_SECONDS}.")
+    return value
+
+
+def _check_charset(ctx, param, value):
+    """Only encodings from the table mkvmerge is known to accept get through."""
+    from core.subtitles import is_known_charset
+    if not is_known_charset(value):
+        raise click.BadParameter(f"unknown encoding '{value}'.")
+    return value
+
+
 def _processing_options(func):
     """Options shared by `preview` and `process`, so the preview shows what process will do."""
     decorators = [
         click.option('--output', type=click.Path(file_okay=False, dir_okay=True),
                      help='Folder to write the processed files to '
                           '(default: the output subfolder inside FOLDER)'),
-        click.option('--offset', default=0.0, type=float, show_default=True,
+        click.option('--offset', default=0.0, type=float, show_default=True, callback=_check_offset,
                      help='Shift the new subtitle in seconds: positive = later (delay), negative = earlier'),
-        click.option('--sub-charset', default='auto', show_default=True,
-                     help="Subtitle encoding: 'auto', 'utf-8', 'cp1256' (Arabic), 'cp1252', 'shift_jis', "
-                          "'gb18030', 'big5', 'euc-kr', 'utf-16', or any iconv name"),
+        click.option('--sub-charset', default='auto', show_default=True, callback=_check_charset,
+                     help="Subtitle encoding: 'auto', 'utf-8', 'cp1256' (Arabic), 'cp1252', "
+                          "'cp1250', 'cp1254', 'cp1251', 'koi8_r', 'cp1253', 'cp1255', 'cp874', "
+                          "'shift_jis', 'gb18030', 'big5', 'euc-kr', 'utf-16' (or another name "
+                          "mkvmerge knows, e.g. 'iso8859_2')"),
         click.option('--keep-original-subs', is_flag=True,
                      help='Keep the subtitles already inside each episode (default: remove them)'),
         click.option('--overwrite', is_flag=True,
@@ -248,6 +273,10 @@ def process(folder, workers, dry_run, yes, output, offset, sub_charset, keep_ori
         if batch_result.failed:
             sys.exit(1)
 
+    except KeyboardInterrupt:
+        # The batch already stopped mkvmerge and removed unfinished files
+        safe_echo(click.style("\nCancelled.", fg='yellow'))
+        sys.exit(130)
     except Exception as e:
         safe_echo(click.style(f"\n[ERROR] {e}", fg='red'))
         sys.exit(1)
@@ -255,7 +284,7 @@ def process(folder, workers, dry_run, yes, output, offset, sub_charset, keep_ori
 
 @cli.command()
 @click.argument('subtitle', type=click.Path(exists=True, dir_okay=False))
-@click.option('--offset', required=True, type=float,
+@click.option('--offset', required=True, type=float, callback=_check_offset,
               help='Seconds: positive = show later (delay), negative = show earlier')
 @click.option('--output', '-o', type=click.Path(dir_okay=False),
               help="Output file (default: '<name>.synced.<ext>' next to the original)")

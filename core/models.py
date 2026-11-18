@@ -64,10 +64,12 @@ class Track:
 
 @dataclass
 class FileInfo:
-    """Metadata from mkvmerge -J. `error` is set when the file could not be read."""
+    """Metadata from mkvmerge -J. `error` is set when the file could not be read;
+    `cancelled` when mkvmerge was stopped (or never started) because of a cancel."""
     filepath: Path
     tracks: list[Track] = field(default_factory=list)
     error: str = ""
+    cancelled: bool = False
 
 
 # ──────────────────────────────────────────────────────────────

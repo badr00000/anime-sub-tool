@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.languages import LANGUAGES, UNDETERMINED, display, normalize, search_text
+from gui.theme import plain_tooltip
 
 CODE_ROLE = Qt.ItemDataRole.UserRole
 SEARCH_ROLE = Qt.ItemDataRole.UserRole + 1
@@ -242,7 +243,9 @@ class MultiLanguageCombo(QComboBox):
     def _refresh_text(self):
         self.lineEdit().setText(", ".join(display(c) for c in self.values()))
         self.lineEdit().setCursorPosition(0)
-        self.setToolTip("\n".join(display(c) for c in self.values()))
+        # Codes can come from a hand-edited preset: never let Qt read them as markup
+        names = [display(c) for c in self.values()]
+        self.setToolTip(plain_tooltip("\n".join(names)) if names else "")
 
     def values(self) -> list[str]:
         out = []

@@ -3,6 +3,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 
 from core.models import MatchConfidence
+from core.subtitles import UNCERTAIN_HINT, is_uncertain
 from gui.theme import Colors, plain_tooltip
 
 _UNCERTAIN = (MatchConfidence.MEDIUM, MatchConfidence.LOW)
@@ -53,11 +54,15 @@ class PreviewPanel(QWidget):
         unmatched_count = sum(1 for m in matches if not m.is_matched)
         uncertain_count = sum(1 for m in matches if m.is_matched and m.confidence in _UNCERTAIN)
         unused_subs = len(scan_result.unmatched_subtitles)
+        encoding_count = sum(1 for m in matches if m.subtitle and is_uncertain(m.subtitle.encoding))
         summary = f"// {len(matches)} EPISODES SCANNED"
         if unmatched_count:
             summary += f"   ·   <span style='color:{Colors.red}'>{unmatched_count} WITHOUT SUBTITLE</span>"
         if uncertain_count:
             summary += f"   ·   <span style='color:{Colors.amber}'>{uncertain_count} TO CHECK</span>"
+        if encoding_count:
+            summary += (f"   ·   <span style='color:{Colors.amber}'>⚠ {encoding_count} "
+                        "ENCODING UNCERTAIN</span>")
         if unused_subs:
             summary += f"   ·   {unused_subs} SUBTITLE(S) UNUSED"
         self.summary_label.setText(summary)
@@ -78,6 +83,11 @@ class PreviewPanel(QWidget):
             sub_tip = sub_name
             if match.subtitle and match.subtitle.encoding:
                 sub_tip += f"\nEncoding: {match.subtitle.encoding}"
+            encoding_uncertain = bool(match.subtitle and is_uncertain(match.subtitle.encoding))
+            if encoding_uncertain:
+                sub_item.setText("⚠ " + sub_name)
+                sub_item.setForeground(QColor(Colors.amber))
+                sub_tip += f"\n⚠ {UNCERTAIN_HINT}"
             sub_item.setToolTip(plain_tooltip(sub_tip))
             if not match.subtitle:
                 sub_item.setForeground(QColor(Colors.red))
@@ -107,6 +117,13 @@ class PreviewPanel(QWidget):
             else:
                 status_text, status_color = "READY", Colors.blue_bright
                 status_tip = "Episode number and title agree."
+            if encoding_uncertain:
+                if status_text == "READY":
+                    status_text, status_color = "⚠ ENCODING", Colors.amber
+                    status_tip = ""
+                status_tip = (status_tip + "\n\n" if status_tip else "") + (
+                    f"Subtitle {UNCERTAIN_HINT}: auto-detect could not tell which code page "
+                    "it uses, so it would be merged unconverted.")
             status_item = QTableWidgetItem(status_text)
             status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             status_item.setForeground(QColor(status_color))

@@ -121,3 +121,34 @@ def test_empty_and_binary_files(tmp_path):
         sf.load(junk)
     with pytest.raises(ValueError):
         sf.load(write(tmp_path / "a.vtt", "WEBVTT\n"))
+
+
+# ── R2-08: times beyond what the format can hold ──────────────────────────────
+
+def test_ass_times_past_9_59_59_are_refused(tmp_path):
+    sub = sf.load(write(tmp_path / "a.ass", ASS))
+    assert "9:00:01.00" in sf.shifted_text(sub, 9 * 3_600_000)         # still fits
+    with pytest.raises(ValueError, match="9:59:59.99"):
+        sf.shifted_text(sub, 10 * 3_600_000)
+    with pytest.raises(ValueError):
+        sf.save_shifted(sub, 10 * 3_600_000, tmp_path / "out.ass")
+    assert not (tmp_path / "out.ass").exists()
+
+
+def test_srt_times_past_99_hours_are_refused(tmp_path):
+    sub = sf.load(write(tmp_path / "a.srt", SRT))
+    with pytest.raises(ValueError, match="99:59:59,999"):
+        sf.shifted_text(sub, 100 * 3_600_000)
+
+
+# ── R2-03: reading with a chosen encoding ─────────────────────────────────────
+
+def test_load_with_an_explicit_encoding(tmp_path):
+    from core.subtitles import ENCODING_UNCERTAIN
+    path = write(tmp_path / "ru.srt", SRT.replace("Hello", "Да"), "cp1251")
+    guessed = sf.load(path)
+    assert guessed.encoding == ENCODING_UNCERTAIN and "Да" not in guessed.cues[0].text
+    chosen = sf.load(path, "cp1251")
+    assert chosen.encoding == "cp1251" and chosen.cues[0].text == "Да"
+    with pytest.raises(ValueError):
+        sf.load(path, "klingon-8")

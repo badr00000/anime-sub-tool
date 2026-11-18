@@ -25,6 +25,16 @@ def get_logger(name: str = "") -> logging.Logger:
     return logging.getLogger(f"{ROOT_LOGGER}.{name}")
 
 
+def _remove_old_session_logs(log_dir) -> None:
+    """The previous version wrote one 'session_*.log' per run and never removed
+    them; this version keeps a single rotating file instead."""
+    for old in log_dir.glob("session_*.log"):
+        try:
+            old.unlink()
+        except OSError:
+            pass   # in use or read-only: try again next start
+
+
 def setup_logging(console: bool = False, level: int = logging.DEBUG) -> logging.Logger:
     """Configure the app's root logger. Safe to call more than once."""
     from utils.paths import get_app_data_dir
@@ -39,6 +49,7 @@ def setup_logging(console: bool = False, level: int = logging.DEBUG) -> logging.
     try:
         log_dir = get_app_data_dir() / LOG_DIR_NAME
         log_dir.mkdir(parents=True, exist_ok=True)
+        _remove_old_session_logs(log_dir)
         # delay=True: the file is only created when something is actually logged
         file_handler = RotatingFileHandler(
             str(log_dir / LOG_FILE_NAME), maxBytes=LOG_MAX_BYTES,

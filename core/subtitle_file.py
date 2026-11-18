@@ -56,8 +56,16 @@ def _srt_to_ms(value: str) -> int:
     return ((h * 60 + m) * 60 + s) * 1000 + ms
 
 
+# Largest time each format can hold: SRT has two hour digits, ASS only one
+_SRT_MAX_MS = 100 * 3_600_000 - 1          # 99:59:59,999
+_ASS_MAX_MS = 10 * 3_600_000 - 10          # 9:59:59.99
+
+
 def _ms_to_srt(ms: int) -> str:
     ms = max(0, int(round(ms)))
+    if ms > _SRT_MAX_MS:
+        raise ValueError(f"A shifted time would be {ms / 3_600_000:.1f} hours, beyond what "
+                         "an SRT file can hold (99:59:59,999).")
     h, rem = divmod(ms, 3_600_000)
     m, rem = divmod(rem, 60_000)
     s, ms = divmod(rem, 1000)
@@ -76,6 +84,9 @@ def _ass_to_ms(value: str) -> Optional[int]:
 
 def _ms_to_ass(ms: int) -> str:
     cs = max(0, int(round(ms / 10)))
+    if cs * 10 > _ASS_MAX_MS:
+        raise ValueError(f"A shifted time would be {ms / 3_600_000:.1f} hours, beyond what "
+                         "an ASS/SSA file can hold (9:59:59.99).")
     h, rem = divmod(cs, 360_000)
     m, rem = divmod(rem, 6000)
     s, cs = divmod(rem, 100)
@@ -90,12 +101,18 @@ def format_offset(ms: int) -> str:
 
 # ── loading ───────────────────────────────────────────────────────────────────
 
-def _read_text(path: Path) -> tuple[str, str]:
+def _read_text(path: Path, encoding: Optional[str] = None) -> tuple[str, str]:
+    """(text, encoding id). `encoding` overrides detection. An uncertain detection
+    is decoded as UTF-8 so the unreadable characters show up as '�'."""
     data = path.read_bytes()
-    encoding = detect_encoding(data)
     if encoding is None:
-        raise ValueError(f"'{path.name}' does not look like a text subtitle file.")
-    return data.decode(python_codec(encoding), errors="replace"), encoding
+        encoding = detect_encoding(data)
+        if encoding is None:
+            raise ValueError(f"'{path.name}' does not look like a text subtitle file.")
+    try:
+        return data.decode(python_codec(encoding), errors="replace"), encoding
+    except LookupError:
+        raise ValueError(f"Unknown encoding '{encoding}'.") from None
 
 
 def _clean_srt_text(text: str) -> str:
@@ -129,12 +146,14 @@ def _ass_event_columns(lines: list[str]) -> tuple[int, int, int, int]:
     return 1, 2, 9, 10
 
 
-def load(path: str | Path) -> SubtitleFile:
+def load(path: str | Path, encoding: Optional[str] = None) -> SubtitleFile:
+    """Read a subtitle. `encoding` (an id such as 'cp1251') skips detection;
+    SubtitleFile.encoding is ENCODING_UNCERTAIN when detection could not tell."""
     path = Path(path)
     ext = path.suffix.lower()
     if ext not in SUPPORTED_EXTENSIONS:
         raise ValueError(f"Unsupported subtitle type '{ext}'. Use .srt, .ass or .ssa.")
-    text, encoding = _read_text(path)
+    text, encoding = _read_text(path, encoding)
 
     if ext == ".srt":
         sub = SubtitleFile(path, "srt", text, encoding)

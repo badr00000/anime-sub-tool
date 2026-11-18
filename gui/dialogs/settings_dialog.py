@@ -1,8 +1,9 @@
 """Settings Dialog — Application preferences."""
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QSpinBox, QFileDialog, QGroupBox, QFormLayout
+    QPushButton, QSpinBox, QFileDialog, QGroupBox, QFormLayout, QWidget,
 )
 
 from core.config import save_config, valid_subfolder_name
@@ -23,7 +24,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.config = config
         self.setWindowTitle("Settings")
-        self.setFixedSize(500, 430)
+        self.setFixedSize(500, 470)
         self.setModal(True)
 
         layout = QVBoxLayout(self)
@@ -54,6 +55,25 @@ class SettingsDialog(QDialog):
         mkv_hint.setWordWrap(True)
         mkv_box.addLayout(mkv_layout)
         mkv_box.addWidget(mkv_hint)
+
+        # A folder saved earlier that no longer holds mkvmerge: the bundled copy is
+        # used meanwhile. It is shown, never a reason to refuse saving other fields.
+        self._stored_mkv_path = (config.mkvtoolnix_path or "").strip()
+        self.mkv_invalid = QWidget()
+        invalid_row = QHBoxLayout(self.mkv_invalid)
+        invalid_row.setContentsMargins(0, 0, 0, 0)
+        invalid_lbl = QLabel("⚠ No mkvmerge in this folder: the bundled copy is used.")
+        invalid_lbl.setTextFormat(Qt.TextFormat.PlainText)
+        invalid_lbl.setProperty("role", "bad")
+        invalid_lbl.setWordWrap(True)
+        clear_btn = QPushButton("Clear")
+        clear_btn.setFixedWidth(80)
+        clear_btn.clicked.connect(self.mkv_path_edit.clear)
+        invalid_row.addWidget(invalid_lbl, 1)
+        invalid_row.addWidget(clear_btn)
+        mkv_box.addWidget(self.mkv_invalid)
+        self.mkv_path_edit.textChanged.connect(self._update_mkv_state)
+        self._update_mkv_state()
 
         # Processing section
         proc_group = QGroupBox("Processing Defaults")
@@ -92,6 +112,10 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         layout.addLayout(btn_layout)
 
+    def _update_mkv_state(self):
+        path = self.mkv_path_edit.text().strip()
+        self.mkv_invalid.setVisible(bool(path) and not has_mkvmerge(path))
+
     def _browse_mkv(self):
         folder = QFileDialog.getExistingDirectory(
             self, "Select MKVToolNix Directory", self.mkv_path_edit.text()
@@ -103,7 +127,9 @@ class SettingsDialog(QDialog):
         mkv_path = self.mkv_path_edit.text().strip()
         subfolder = self.subfolder_edit.text().strip()
 
-        if mkv_path and not has_mkvmerge(mkv_path):
+        # Only a newly typed folder is checked: one saved earlier that is now
+        # invalid stays as it is (flagged above) so the rest can still be saved.
+        if mkv_path and mkv_path != self._stored_mkv_path and not has_mkvmerge(mkv_path):
             messages.warn(self, "MKVToolNix",
                           f"There is no mkvmerge in this folder:\n\n{mkv_path}\n\n"
                           "Pick the folder that contains it, or leave the field empty "

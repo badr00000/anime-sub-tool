@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-from core.config import clean_preset, save_config
+from core.config import DEFAULT_PRESET_NAME, clean_preset, is_reserved_preset_name, save_config
 from core.constants import MAX_PARALLEL_WORKERS, MIN_PARALLEL_WORKERS
 from core.languages import name_of
 from core.models import AppConfig, ProcessingOptions
@@ -62,9 +62,10 @@ class OptionsPanel(QWidget):
         preset_layout = QHBoxLayout(preset_group)
 
         self.preset_combo = QComboBox()
-        self.preset_combo.addItem("Default")
+        self.preset_combo.addItem(DEFAULT_PRESET_NAME)
         for name in self.config.presets:
-            self.preset_combo.addItem(name)
+            if not is_reserved_preset_name(name):     # load_config() renames those
+                self.preset_combo.addItem(name)
 
         self.preset_combo.currentTextChanged.connect(self._load_preset)
 
@@ -113,7 +114,8 @@ class OptionsPanel(QWidget):
         self.charset_combo = QComboBox()
         for label, value in CHARSET_CHOICES:
             self.charset_combo.addItem(label, value)
-        self.charset_combo.setToolTip("Fixes Arabic text that shows up as garbage symbols.")
+        self.charset_combo.setToolTip("Fixes subtitle text that shows up as garbage symbols.\n"
+                                      "Pick it by hand when the preview marks the encoding uncertain.")
 
         # Language + track name of the subtitle being added (defaults come from Settings)
         default_lang = self.config.subtitle_language or "ara"
@@ -217,9 +219,9 @@ class OptionsPanel(QWidget):
         Preset values come from a hand-editable file: each one is type-checked and a
         bad or missing value simply leaves the default in place.
         """
-        preset = {} if name == "Default" else clean_preset(self.config.presets.get(name))
+        preset = {} if name == DEFAULT_PRESET_NAME else clean_preset(self.config.presets.get(name))
         lang = preset.get("subtitle_language") or self.config.subtitle_language or "ara"
-        if name == "Default":
+        if name == DEFAULT_PRESET_NAME:
             sub_name = self.config.subtitle_name or name_of(lang)
         else:
             sub_name = preset.get("subtitle_name") or name_of(lang)
@@ -248,11 +250,18 @@ class OptionsPanel(QWidget):
     def _save_preset(self):
         from PySide6.QtWidgets import QInputDialog
         name, ok = QInputDialog.getText(self, "Save Preset", "Enter preset name:")
-        if ok and name.strip():
-            self.save_preset(name.strip())
+        if ok and name.strip() and not self.save_preset(name.strip()):
+            from gui.dialogs import messages
+            messages.warn(self, "Save Preset",
+                          f"'{DEFAULT_PRESET_NAME}' is the built-in preset and cannot be "
+                          "replaced. Pick another name.")
 
-    def save_preset(self, name: str) -> None:
-        """Store the current form as a preset and write the shared config to disk."""
+    def save_preset(self, name: str) -> bool:
+        """Store the current form as a preset and write the shared config to disk.
+        False (nothing saved) for the reserved name 'Default'."""
+        name = name.strip()
+        if not name or is_reserved_preset_name(name):
+            return False
         opts = self.get_options()
         self.config.presets[name] = {
             "keep_audio_langs": opts.keep_audio_langs,
@@ -277,10 +286,11 @@ class OptionsPanel(QWidget):
         if self.preset_combo.findText(name) == -1:
             self.preset_combo.addItem(name)
         self.preset_combo.setCurrentText(name)
+        return True
 
     def _delete_preset(self):
         name = self.preset_combo.currentText()
-        if name == "Default":
+        if name == DEFAULT_PRESET_NAME:
             return
         if name in self.config.presets:
             del self.config.presets[name]

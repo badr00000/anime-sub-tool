@@ -26,6 +26,10 @@ TRACKS = [
 
 
 class FakeMKV:
+    """Stands in for MKVToolsWrapper. Like the real one, nothing starts after
+    terminate_all(), and a merge killed mid-write leaves a truncated partial file
+    and reports CANCELLED (the real mkvmerge exits with code 1 = 'warnings' then)."""
+
     def __init__(self, tracks=TRACKS, status=S.COMPLETED, identify_error=""):
         self.tracks = tracks
         self.status = status
@@ -36,22 +40,35 @@ class FakeMKV:
         self.release = threading.Event()
         self.release.set()
 
-    def identify(self, path):
+    def _stopped(self, cancel_event):
+        return self.terminated or (cancel_event is not None and cancel_event.is_set())
+
+    def identify(self, path, cancel_event=None):
+        if self._stopped(cancel_event):
+            return FileInfo(filepath=Path(path), error="Cancelled", cancelled=True)
         return FileInfo(filepath=Path(path), tracks=list(self.tracks), error=self.identify_error)
 
-    def merge(self, **kwargs):
+    def merge(self, cancel_event=None, **kwargs):
+        output = Path(kwargs["output_path"])
+        cancelled = ProcessingResult(status=S.CANCELLED, output_path=output, message="Cancelled")
+        if self._stopped(cancel_event):
+            return cancelled
         self.calls.append(kwargs)
         self.started.set()
         self.release.wait(10)
+        if self.terminated:
+            output.write_bytes(b"trunc")        # killed mid-write, exit code 1
+            return cancelled
         if self.status in (S.COMPLETED, S.COMPLETED_WITH_WARNINGS):
-            Path(kwargs["output_path"]).write_bytes(b"MKV")
+            output.write_bytes(b"MKV")
         elif self.status == S.FAILED:
-            Path(kwargs["output_path"]).write_bytes(b"half")     # a broken partial file
-        return ProcessingResult(status=self.status, output_path=Path(kwargs["output_path"]),
+            output.write_bytes(b"half")     # a broken partial file
+        return ProcessingResult(status=self.status, output_path=output,
                                 message="Error: boom" if self.status == S.FAILED else "ok")
 
     def terminate_all(self):
         self.terminated = True
+        self.release.set()
 
 
 @pytest.fixture
@@ -224,7 +241,7 @@ def test_charset_is_detected_and_passed(season):
     arabic = SRT_TEXT.replace("Hello", "مرحبا بكم في هذا العالم").replace("World", "إلى اللقاء يا صديقي")
     write_srt(season / "Show - 01.srt", arabic, "cp1256")
     result, fake = run_one(season)
-    assert fake.calls[0]["sub_charset"] == "cp1256"
+    assert fake.calls[0]["sub_charset"] == "CP1256"
 
 
 def run_batch(folder, options, fake=None, workers=2, logs=None):
@@ -302,3 +319,112 @@ def test_engine_uses_config_and_reports_output_dir(season):
 def test_worker_count_is_clamped():
     assert BatchProcessor(EpisodeProcessor(FakeMKV(), ProcessingOptions()), max_workers=0).max_workers == 1
     assert BatchProcessor(EpisodeProcessor(FakeMKV(), ProcessingOptions()), max_workers=99).max_workers == 8
+
+
+# ── R2-04: Ctrl+C stops the batch ─────────────────────────────────────────────
+
+def test_keyboard_interrupt_stops_queued_episodes(season):
+    import _thread
+    fake = FakeMKV()
+    fake.release.clear()                     # episode 1 stays inside mkvmerge
+    options = ProcessingOptions()
+    batch = BatchProcessor(EpisodeProcessor(fake, options), max_workers=1)
+
+    def press_ctrl_c():
+        assert fake.started.wait(10)
+        _thread.interrupt_main()
+
+    helper = threading.Thread(target=press_ctrl_c)
+    helper.start()
+    with pytest.raises(KeyboardInterrupt):
+        batch.process_all(matches_of(season), options)
+    helper.join(10)
+    assert fake.terminated is True and batch.is_cancelled
+    assert len(fake.calls) == 1              # episodes 2 and 3 never ran
+    out_dir = season / "PROCESSED"
+    assert not list(out_dir.glob("*.partial")) and not list(out_dir.glob("*.mkv"))
+
+
+# ── R2-05: the final rename fails ─────────────────────────────────────────────
+
+def test_failed_rename_removes_the_partial(season, monkeypatch):
+    import core.processor as processor_module
+
+    def refuse(src, dst):
+        raise PermissionError(13, "The file is open in another program", str(dst))
+
+    monkeypatch.setattr(processor_module.os, "replace", refuse)
+    result, fake = run_one(season, ProcessingOptions(overwrite_existing=True))
+    assert result.status == S.FAILED and "Could not finish writing" in result.message
+    assert list((season / "PROCESSED").iterdir()) == []      # no stray .partial
+
+
+# ── R2-06: the UTF-16 temporary copy ──────────────────────────────────────────
+
+def test_utf16_copy_is_written_outside_the_season_and_removed(season):
+    arabic = SRT_TEXT.replace("Hello", "مرحبا بكم في هذا العالم")
+    write_srt(season / "Show - 01.srt", arabic, "utf-16-le")
+    seen = {}
+    fake = FakeMKV()
+    original = fake.merge
+
+    def spy(**kwargs):
+        sub = Path(kwargs["subtitle_path"])
+        seen["path"], seen["text"] = sub, sub.read_text(encoding="utf-8-sig")
+        return original(**kwargs)
+
+    fake.merge = spy
+    for same_folder in (True, False):
+        result, _ = run_one(season, ProcessingOptions(create_output_folder=not same_folder,
+                                                      overwrite_existing=True), fake)
+        assert result.status == S.COMPLETED
+        assert seen["path"].parent not in (season, season / "PROCESSED")
+        assert "مرحبا" in seen["text"] and seen["path"].suffix == ".srt"
+        assert not seen["path"].exists() and not seen["path"].parent.exists()
+    assert not [p for p in season.rglob("*") if ".partial" in p.name]
+
+
+def test_leftover_temporary_files_are_not_scanned(season):
+    (season / f"Show - 01 {OUTPUT_MARKER}.mkv.partial.srt").write_bytes(SRT_TEXT.encode())
+    (season / f"Show - 02 {OUTPUT_MARKER}.srt").write_bytes(SRT_TEXT.encode())
+    (season / "Show - 03.mkv.partial").write_bytes(b"half")
+    matches = matches_of(season)
+    assert [(m.video.filename, m.subtitle.filename) for m in matches] == [
+        ("Show - 01.mkv", "Show - 01.srt"), ("Show - 02.mkv", "Show - 02.srt"),
+        ("Show - 03.mkv", "Show - 03.srt")]
+
+
+# ── R2-02 / R2-03 in the processor ────────────────────────────────────────────
+
+def test_cancel_before_merge_starts_nothing(season):
+    fake = FakeMKV()
+    event = threading.Event()
+    event.set()
+    processor = EpisodeProcessor(fake, ProcessingOptions())
+    result = processor.process(matches_of(season)[0], cancel_event=event)
+    assert result.status == S.CANCELLED and fake.calls == []
+    assert not (season / "PROCESSED").exists()
+
+
+def test_uncertain_encoding_is_merged_unconverted_with_a_warning(season):
+    write_srt(season / "Show - 01.srt", SRT_TEXT.replace("Hello", "Да"), "cp1251")
+    logs = []
+    result, fake = run_batch(season, ProcessingOptions(), logs=logs)
+    assert fake.calls[0]["sub_charset"] is None
+    first = result.results[0]
+    assert any("encoding uncertain" in w for w in first.warnings)
+    assert any(lvl == "WARNING" and "encoding uncertain" in m for lvl, m in logs)
+
+    processor = EpisodeProcessor(FakeMKV(), ProcessingOptions(overwrite_existing=True))
+    preview = processor.generate_preview(matches_of(season)[0])
+    assert any(op.action == "⚠ Encoding" and "uncertain" in op.target for op in preview.operations)
+
+    # Picked by hand: converted, no warning
+    result, fake = run_one(season, ProcessingOptions(subtitle_charset="cp1251", overwrite_existing=True))
+    assert fake.calls[0]["sub_charset"] == "CP1251" and result.warnings == []
+
+
+def test_unknown_charset_fails_the_episode_instead_of_reaching_mkvmerge(season):
+    result, fake = run_one(season, ProcessingOptions(subtitle_charset="klingon-8"))
+    assert result.status == S.FAILED and "klingon-8" in result.message
+    assert fake.calls == []

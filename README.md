@@ -142,8 +142,7 @@ The bundled third-party programs and libraries keep their own licences (below).
 
 This tool bundles and uses third-party software, each under its own licence:
 MKVToolNix / mkvmerge (GPLv2), Qt and PySide6 (LGPLv3), anitopy (MPL-2.0),
-RapidFuzz (MIT), click (BSD-3-Clause), watchdog (Apache-2.0) and
-charset-normalizer (MIT).
+RapidFuzz (MIT), click (BSD-3-Clause) and watchdog (Apache-2.0).
 
 See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the notices and source
 code locations, and [licenses/GPL-2.0.txt](licenses/GPL-2.0.txt) for the full

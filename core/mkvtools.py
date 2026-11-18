@@ -70,9 +70,45 @@ class MKVToolsWrapper:
 
     def __init__(self, mkvtoolnix_path: Optional[str] = None):
         self.mkvmerge_path = locate_mkvmerge(mkvtoolnix_path)
+        # Guards _running, _killed and _terminated together: a process is either
+        # started before terminate_all() (and then killed by it) or never started.
         self._running: set[subprocess.Popen] = set()
+        self._killed: set[subprocess.Popen] = set()
         self._lock = threading.Lock()
         self._terminated = threading.Event()
+
+    @property
+    def terminated(self) -> bool:
+        """True once terminate_all() ran: no mkvmerge is started any more."""
+        return self._terminated.is_set()
+
+    def _start(self, cmd: list[str], cancel_event: Optional[threading.Event] = None,
+               **popen_args) -> Optional[subprocess.Popen]:
+        """Start and register a mkvmerge process; None when cancelled before the start.
+
+        The checks and the registration happen under the lock terminate_all() takes,
+        so a process can never slip in after the batch was stopped.
+        """
+        with self._lock:
+            if self._terminated.is_set() or (cancel_event is not None and cancel_event.is_set()):
+                return None
+            process = subprocess.Popen(
+                cmd, stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
+                creationflags=_NO_WINDOW, **popen_args)
+            self._running.add(process)
+            return process
+
+    def _finish(self, process: subprocess.Popen) -> bool:
+        """Unregister a process that has exited; True when terminate_all() killed it.
+
+        A killed mkvmerge exits with code 1 on Windows -- the same code as
+        "finished with warnings" -- so the exit code alone cannot tell them apart.
+        """
+        with self._lock:
+            self._running.discard(process)
+            killed = process in self._killed
+            self._killed.discard(process)
+            return killed
 
     def _start_error(self, error: Exception) -> str:
         return f"mkvmerge could not be started ({self.mkvmerge_path}): {error}"
@@ -93,19 +129,32 @@ class MKVToolsWrapper:
         return False, (f"mkvmerge at {self.mkvmerge_path} exited with code "
                        f"{result.returncode}: {detail}")
 
-    def identify(self, file_path: str) -> FileInfo:
-        """Run 'mkvmerge -J file' and parse the JSON. On failure FileInfo.error is set."""
+    def identify(self, file_path: str, cancel_event: Optional[threading.Event] = None) -> FileInfo:
+        """Run 'mkvmerge -J file' and parse the JSON. On failure FileInfo.error is set;
+        when stopped by a cancel FileInfo.cancelled is set too."""
         info = FileInfo(filepath=Path(file_path))
         try:
             cmd = [str(self.mkvmerge_path), "-J", _path_arg(file_path)]
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                stdin=subprocess.DEVNULL, creationflags=_NO_WINDOW,
-            )
+            process = self._start(cmd, cancel_event, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except (OSError, ValueError) as e:
             info.error = self._start_error(e) if isinstance(e, OSError) else str(e)
             logger.error(info.error)
             return info
+        if process is None:
+            info.error, info.cancelled = "Cancelled", True
+            return info
+        try:
+            stdout, stderr = process.communicate()
+        except BaseException:
+            process.kill()
+            process.wait()
+            raise
+        finally:
+            killed = self._finish(process)
+        if killed:
+            info.error, info.cancelled = "Cancelled", True
+            return info
+        result = subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
 
         try:
             data = json.loads(result.stdout)
@@ -144,14 +193,14 @@ class MKVToolsWrapper:
 
     def terminate_all(self) -> None:
         """Stop every running mkvmerge (used when the app is closing)."""
-        self._terminated.set()
         with self._lock:
-            running = list(self._running)
-        for process in running:
-            try:
-                process.terminate()
-            except OSError:
-                pass
+            self._terminated.set()
+            for process in self._running:
+                self._killed.add(process)
+                try:
+                    process.terminate()
+                except OSError:
+                    pass
 
     def merge(self, video_path: str, output_path: str,
               subtitle_path: Optional[str] = None,
@@ -165,7 +214,8 @@ class MKVToolsWrapper:
               edit_new_name: str = "Arabic",
               sub_offset_ms: int = 0,
               sub_charset: Optional[str] = None,
-              progress_callback: Optional[Callable[[int], None]] = None) -> ProcessingResult:
+              progress_callback: Optional[Callable[[int], None]] = None,
+              cancel_event: Optional[threading.Event] = None) -> ProcessingResult:
         """Build and execute mkvmerge command. Parse real-time 'Progress: XX%' from stdout."""
         try:
             video_arg = _path_arg(video_path)
@@ -216,27 +266,21 @@ class MKVToolsWrapper:
 
         logger.info(f"Running mkvmerge: {subprocess.list2cmdline(cmd)}")
 
+        cancelled = ProcessingResult(status=ProcessingStatus.CANCELLED, output_path=Path(output_path),
+                                     message="Cancelled")
         try:
             # Read stdout line by line. stderr is merged into stdout so it can never
             # fill its pipe and block mkvmerge, and so its error text is captured.
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
-                creationflags=_NO_WINDOW,
-            )
+            process = self._start(cmd, cancel_event, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         except OSError as e:
             message = self._start_error(e)
             logger.error(message)
             return ProcessingResult(status=ProcessingStatus.FAILED, output_path=Path(output_path),
                                     message=message)
+        if process is None:
+            return cancelled
 
-        with self._lock:
-            self._running.add(process)
+        killed = False
         try:
             problems: list[str] = []
             for line in iter(process.stdout.readline, ''):
@@ -249,19 +293,21 @@ class MKVToolsWrapper:
                 if text.startswith(("Error:", "Warning:")):
                     problems.append(text)
             process.wait()
-        except Exception as e:
+        except BaseException as e:
             process.kill()
+            process.wait()
+            if not isinstance(e, Exception):
+                raise
             logger.error(f"Error while running mkvmerge: {e}")
             return ProcessingResult(status=ProcessingStatus.FAILED, output_path=Path(output_path),
                                     message=f"mkvmerge failed: {e}")
         finally:
             process.stdout.close()
-            with self._lock:
-                self._running.discard(process)
+            killed = self._finish(process)
 
-        if self._terminated.is_set() and process.returncode not in (0, MKVMERGE_WARNING):
-            return ProcessingResult(status=ProcessingStatus.CANCELLED, output_path=Path(output_path),
-                                    message="Cancelled")
+        if killed:
+            # Whatever the exit code, the output of a killed mkvmerge is incomplete
+            return cancelled
 
         errors = [p for p in problems if p.startswith("Error:")]
         warnings = [p for p in problems if p.startswith("Warning:")]

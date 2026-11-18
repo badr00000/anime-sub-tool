@@ -97,7 +97,11 @@ class ProcessingEngine:
 
     def cancel(self, force: bool = False) -> None:
         """Stop a running batch: episodes not started yet are cancelled, running ones
-        finish (force=True stops them too)."""
+        finish. force=True also stops the running mkvmerge processes and makes every
+        later start attempt of this engine return CANCELLED."""
         self._cancel_requested = True
+        if force:
+            # Also covers a batch that is about to start (no _active_batch yet)
+            self.mkv_tools.terminate_all()
         if self._active_batch is not None:
             self._active_batch.cancel(force=force)

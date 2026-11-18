@@ -7,15 +7,12 @@ Output: dist/AnimeSubTool.exe
 import sys
 from pathlib import Path
 
-import PyInstaller.__main__
-
 ROOT = Path(__file__).parent.absolute()
 
 
-def build():
-    print("Building Anime Subtitle Automation Tool (single file)...")
-
-    args = [
+def pyinstaller_args() -> list[str]:
+    """The PyInstaller command line (kept separate so tests can check what ships)."""
+    return [
         str(ROOT / "main.py"),
         "--name=AnimeSubTool",
         "--onefile",            # everything packed into one .exe
@@ -35,13 +32,19 @@ def build():
         # Only mkvmerge is needed at run time (not the whole bin folder)
         f"--add-data={ROOT / 'bin' / 'mkvmerge.exe'};bin",
         f"--add-data={ROOT / 'app_icon.ico'};.",
-        # Licence notices, shown by About -> Licenses
+        # Licence texts, shown by About -> Licenses: the app's own first
+        f"--add-data={ROOT / 'LICENSE'};.",
         f"--add-data={ROOT / 'THIRD_PARTY_LICENSES.md'};.",
         f"--add-data={ROOT / 'licenses'};licenses",
     ]
 
+
+def build():
+    import PyInstaller.__main__
+
+    print("Building Anime Subtitle Automation Tool (single file)...")
     try:
-        PyInstaller.__main__.run(args)
+        PyInstaller.__main__.run(pyinstaller_args())
     except Exception as e:
         print(f"Build failed: {e}")
         sys.exit(1)

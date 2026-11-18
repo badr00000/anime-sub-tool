@@ -112,3 +112,50 @@ def test_shift_on_empty_subtitle_fails(cli, tmp_path):
     result = CliRunner().invoke(cli, ["shift", str(empty), "--offset", "1"])
     assert result.exit_code == 1 and "no subtitle lines" in result.output
     assert not (tmp_path / "empty.synced.srt").exists()
+
+
+# ── R2-08: offsets are bounded ────────────────────────────────────────────────
+
+@pytest.mark.parametrize("offset", ["inf", "-inf", "nan", "1e12", "3600.5", "-3601"])
+def test_absurd_offsets_are_rejected(cli, tmp_path, offset):
+    src = write_srt(tmp_path / "a.srt")
+    runner = CliRunner()
+    shifted = runner.invoke(cli, ["shift", str(src), f"--offset={offset}"])
+    assert shifted.exit_code == 2 and "--offset" in shifted.output, shifted.output
+    assert shifted.exception is None or isinstance(shifted.exception, SystemExit)
+    assert not (tmp_path / "a.synced.srt").exists()
+    for command in ("process", "preview"):
+        result = runner.invoke(cli, [command, str(tmp_path), f"--offset={offset}", "-y"]
+                               if command == "process" else [command, str(tmp_path), f"--offset={offset}"])
+        assert result.exit_code == 2 and "--offset" in result.output, result.output
+
+
+def test_limit_offsets_are_accepted(cli, tmp_path):
+    src = write_srt(tmp_path / "a.srt")
+    result = CliRunner().invoke(cli, ["shift", str(src), "--offset", "3600"])
+    assert result.exit_code == 0, result.output
+    assert "01:00:01,000 --> 01:00:02,000" in (tmp_path / "a.synced.srt").read_text(encoding="utf-8-sig")
+
+
+# ── R2-04: Ctrl+C in the CLI ──────────────────────────────────────────────────
+
+def test_ctrl_c_prints_cancelled_and_exits_130(cli, tmp_path, monkeypatch):
+    import cli.commands as commands
+    (tmp_path / "Show - 01.mkv").write_bytes(b"v")
+    write_srt(tmp_path / "Show - 01.srt")
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(commands, "validate_mkvtoolnix", lambda tools: "mkvmerge v100")
+    monkeypatch.setattr(commands.ProcessingEngine, "process_batch", interrupted)
+    result = CliRunner().invoke(cli, ["process", str(tmp_path), "-y"])
+    assert result.exit_code == 130
+    assert "Cancelled." in result.output and "Traceback" not in result.output
+
+
+def test_unknown_sub_charset_is_rejected(cli, tmp_path):
+    result = CliRunner().invoke(cli, ["preview", str(tmp_path), "--sub-charset", "klingon-8"])
+    assert result.exit_code == 2 and "--sub-charset" in result.output
+    ok = CliRunner().invoke(cli, ["preview", str(tmp_path), "--sub-charset", "cp1251"])
+    assert ok.exit_code == 0, ok.output

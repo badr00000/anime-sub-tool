@@ -1,16 +1,17 @@
 import os
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import Callable, Optional
 
 from core.constants import MAX_PARALLEL_WORKERS, MIN_PARALLEL_WORKERS
 from core.models import EpisodeMatch, ProcessingOptions, BatchResult, ProcessingStatus, ProcessingResult
-from core.processor import EpisodeProcessor
+from core.processor import EpisodeProcessor, partial_path_for
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 _LOG_LEVELS = {"ERROR": logger.error, "WARNING": logger.warning}
+_POLL_SECONDS = 0.25
 
 
 class BatchProcessor:
@@ -74,7 +75,8 @@ class BatchProcessor:
                     res = self.processor.dry_run(match)
                 else:
                     _log(f"Starting processing for episode {episode_num}")
-                    res = self.processor.process(match, progress_callback=local_progress)
+                    res = self.processor.process(match, progress_callback=local_progress,
+                                                 cancel_event=self._cancel_event)
             except Exception as e:
                 logger.exception(f"Unexpected error on episode {episode_num}")
                 res = ProcessingResult(status=ProcessingStatus.FAILED, output_path=None, message=str(e))
@@ -95,22 +97,36 @@ class BatchProcessor:
                 _log(f"Completed processing for episode {episode_num}")
             return res
 
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+        executor = ThreadPoolExecutor(max_workers=self.max_workers)
+        try:
             future_to_index = {executor.submit(_process_single, i, match): i
                                for i, match in enumerate(matches)}
 
-            for future in as_completed(future_to_index):
-                index = future_to_index[future]
-                match = matches[index]
-                res = future.result()
-                res.video_name = match.video.filename
-                results[index] = res
-                completed_episodes += 1
+            pending = set(future_to_index)
+            while pending:
+                # Wake up regularly: on Windows a thread blocked without a timeout
+                # does not see Ctrl+C until an episode happens to finish.
+                done, pending = wait(pending, timeout=_POLL_SECONDS, return_when=FIRST_COMPLETED)
+                for future in sorted(done, key=future_to_index.get):
+                    index = future_to_index[future]
+                    match = matches[index]
+                    res = future.result()
+                    res.video_name = match.video.filename
+                    results[index] = res
+                    completed_episodes += 1
 
-                if progress_callback:
-                    # Update overall progress at the end of each episode
-                    overall = int((completed_episodes * 100) / total_episodes)
-                    progress_callback(match.video.episode_num or "?", 100, overall)
+                    if progress_callback:
+                        # Update overall progress at the end of each episode
+                        overall = int((completed_episodes * 100) / total_episodes)
+                        progress_callback(match.video.episode_num or "?", 100, overall)
+        except BaseException:
+            # Ctrl+C (KeyboardInterrupt) or any other abort: a plain `with` block would
+            # wait for every queued episode to run. Stop everything instead.
+            self.cancel(force=True)
+            executor.shutdown(wait=True, cancel_futures=True)
+            self._remove_partials(matches)
+            raise
+        executor.shutdown(wait=True)
 
         def count(*statuses: ProcessingStatus) -> int:
             return sum(1 for r in results if r.status in statuses)
@@ -124,6 +140,14 @@ class BatchProcessor:
             dry_run=options.dry_run,
             results=results,
         )
+
+    def _remove_partials(self, matches: list[EpisodeMatch]) -> None:
+        """Best effort: delete unfinished outputs left by an aborted batch."""
+        for match in matches:
+            try:
+                partial_path_for(self.processor.output_path(match.video.filepath)).unlink(missing_ok=True)
+            except (OSError, ValueError):
+                pass
 
     def cancel(self, force: bool = False):
         """Stop the batch: episodes not started yet are cancelled, running ones

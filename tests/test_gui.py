@@ -100,23 +100,29 @@ def test_check_tools_reports_a_missing_mkvmerge(window, dialogs, monkeypatch):
 # ── M2: scans ──
 
 def test_double_scan_does_not_crash_and_reruns_once(window, season, monkeypatch):
+    import threading
     from core.engine import ProcessingEngine
     calls = []
+    entered = threading.Event()
+    gate = threading.Event()             # the first scan stays inside until released
     original = ProcessingEngine.scan_and_match
 
-    def slow_scan(self, folder):
+    def gated_scan(self, folder):
         calls.append(folder)
-        time.sleep(0.2)
+        entered.set()
+        assert gate.wait(10)
         return original(self, folder)
 
-    monkeypatch.setattr(ProcessingEngine, "scan_and_match", slow_scan)
+    monkeypatch.setattr(ProcessingEngine, "scan_and_match", gated_scan)
     window.folder_picker.set_path(str(season))
     window._run_scan()
     first_worker = window._scan_worker
+    assert entered.wait(10)                  # the first scan is certainly running
     window._run_scan()                       # while the first is running
     window._on_folder_changed()              # and the watcher fires too
     assert window._scan_worker is first_worker and window._rescan_pending is True
-    assert not window.scan_btn.isEnabled()
+    assert not window.scan_btn.isEnabled() and len(calls) == 1
+    gate.set()
 
     assert pump(lambda: len(calls) == 2 and window._scan_worker is None)
     assert window._rescan_pending is False
@@ -180,9 +186,11 @@ def test_options_panel_defaults_come_from_config(qapp):
     panel.unmatched_cb.setChecked(True)
     options = panel.get_options()
     assert options.overwrite_existing and options.process_unmatched
+    from core.subtitles import CHARSET_CHOICES
     labels = [panel.charset_combo.itemData(i) for i in range(panel.charset_combo.count())]
-    assert labels == ["auto", "utf-8", "cp1256", "cp1252", "shift_jis", "gb18030", "big5",
-                      "euc-kr", "utf-16"]
+    assert labels == [value for _, value in CHARSET_CHOICES]
+    for added in ("cp1251", "koi8_r", "cp1253", "cp1255", "cp874", "cp1250", "cp1254"):
+        assert added in labels
 
 
 def test_settings_and_presets_do_not_overwrite_each_other(window, dialogs):
@@ -479,16 +487,198 @@ def test_about_dialog_shows_third_party_licenses(qapp):
     licenses = LicensesDialog()
     text = licenses.text.toPlainText()
     assert text == load_license_text()
+    # The app's own MIT licence comes first, then the third-party notices
+    assert text.startswith("MIT License")
+    assert text.index("MIT License") < text.index("Third-party software")
+    assert "Written offer" in text and "MKVToolNix 100.0" in text
     for needle in ("MKVToolNix", "codeberg.org/mbunkus/mkvtoolnix", "GNU GENERAL PUBLIC LICENSE",
                    "Version 2, June 1991", "PySide6", "Lesser General Public License", "anitopy",
-                   "RapidFuzz", "click", "watchdog", "charset-normalizer"):
+                   "RapidFuzz", "click", "watchdog"):
         assert needle in text
+    # No longer a dependency, so it must not be credited
+    assert "charset-normalizer" not in text
 
 
 def test_build_script_ships_licenses_and_only_mkvmerge():
+    import importlib.util
     from conftest import ROOT
-    build = (ROOT / "build.py").read_text(encoding="utf-8")
-    assert "THIRD_PARTY_LICENSES.md" in build and "'licenses'" in build
-    assert "'bin' / 'mkvmerge.exe'" in build and "mkvpropedit" not in build
-    assert "{ROOT / 'bin'};bin" not in build
+    spec = importlib.util.spec_from_file_location("build_script", ROOT / "build.py")
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)                     # PyInstaller is only imported by build()
+    args = build.pyinstaller_args()
+    data = {}
+    for arg in args:
+        if arg.startswith("--add-data="):
+            source, target = arg[len("--add-data="):].rsplit(";", 1)
+            data[Path(source)] = target
+    assert data[ROOT / "LICENSE"] == "."
+    assert data[ROOT / "THIRD_PARTY_LICENSES.md"] == "."
+    assert data[ROOT / "licenses"] == "licenses"
+    assert data[ROOT / "bin" / "mkvmerge.exe"] == "bin"
+    assert ROOT / "bin" not in data                    # never the whole bin folder
+    assert not any("mkvpropedit" in arg for arg in args)
+    for source in data:
+        assert source.exists(), source
     assert (ROOT / "licenses" / "GPL-2.0.txt").stat().st_size > 15000
+
+
+# ── R2-02: closing waits until the batch has really stopped ───────────────────
+
+class SlowStopWorker(StubWorker):
+    """Keeps running until the force cancel has been sent a second time, like a
+    batch where one mkvmerge was starting while the first terminate went out."""
+
+    def __init__(self):
+        super().__init__()
+        self.finished = False
+
+    def wait(self, ms):
+        self.waited.append(ms)
+        self.finished = len(self.cancelled) >= 2
+        return self.finished
+
+
+def test_close_keeps_stopping_until_the_worker_has_finished(window, dialogs, monkeypatch):
+    import gui.app as app_module
+    monkeypatch.setattr(app_module, "_QUIT_WAIT_STEP_MS", 1)
+    worker = SlowStopWorker()
+    window._process_worker = worker
+    event = QCloseEvent()
+    window.closeEvent(event)
+    assert event.isAccepted() and worker.finished
+    assert worker.cancelled == [True, True] and len(worker.waited) == 2
+
+
+def test_close_with_a_real_engine_waits_for_the_thread(window, dialogs, season):
+    """The QThread is finished when closeEvent returns: no 'destroyed while running'."""
+    import threading
+    from gui.app import ProcessWorker
+    from core.models import FileInfo
+
+    gate = threading.Event()
+
+    class BlockingTools:
+        def identify(self, path, cancel_event=None):
+            gate.wait(10)
+            return FileInfo(filepath=Path(path), error="Cancelled", cancelled=True)
+
+        def terminate_all(self):
+            gate.set()
+
+    from core.engine import ProcessingEngine
+    scan = ProcessingEngine(window.config).scan_and_match(season)
+    worker = ProcessWorker(scan, ProcessingOptions(), window.config)
+    worker._engine.mkv_tools = BlockingTools()
+    worker.start()
+    window._process_worker = worker
+    window.closeEvent(QCloseEvent())
+    assert worker.isFinished()
+    window._process_worker = None
+
+
+# ── R2-09: 'Default' preset name ──────────────────────────────────────────────
+
+def test_preset_cannot_be_saved_as_default(window, dialogs, monkeypatch):
+    from PySide6.QtWidgets import QInputDialog
+    panel = window.options_panel
+    count = panel.preset_combo.count()
+    for name in ("Default", "default", " DEFAULT "):
+        assert panel.save_preset(name) is False
+    assert "Default" not in window.config.presets and panel.preset_combo.count() == count
+
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("default", True)))
+    panel._save_preset()
+    assert dialogs.shown[-1][0] == "warn" and "built-in" in dialogs.shown[-1][2]
+    assert panel.preset_combo.count() == count
+
+
+def test_preset_named_default_in_config_loads_and_deletes(qapp, dialogs):
+    import json
+    from core import config as cfg
+    path = cfg._get_config_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"presets": {"Default": {"workers": 2, "overwrite_existing": True}}}),
+                    encoding="utf-8")
+    from gui.widgets.options_panel import OptionsPanel
+    panel = OptionsPanel(load_config())
+    names = [panel.preset_combo.itemText(i) for i in range(panel.preset_combo.count())]
+    assert names == ["Default", "Default (saved)"]          # no duplicate entry
+    panel.preset_combo.setCurrentText("Default (saved)")
+    assert panel.worker_spin.value() == 2 and panel.overwrite_cb.isChecked()
+    panel._delete_preset()
+    assert panel.preset_combo.findText("Default (saved)") == -1
+    assert load_config().presets == {}
+
+
+# ── R2-10: tooltips built from preset/config data are plain text ──────────────
+
+def test_multi_language_tooltip_is_plain_text(qapp):
+    from gui.widgets.language_picker import MultiLanguageCombo
+    combo = MultiLanguageCombo()
+    combo.set_values(["jpn", "<img src=x>"])
+    tip = combo.toolTip()
+    assert tip.startswith("<qt>") and "<img" not in tip and "&lt;img" in tip
+    combo.set_values([])
+    assert combo.toolTip() == ""
+
+
+# ── R2-11: an invalid saved MKVToolNix folder does not block Settings ─────────
+
+def test_settings_saves_other_fields_with_an_invalid_stored_folder(window, dialogs, tmp_path):
+    from gui.dialogs.settings_dialog import SettingsDialog
+    window.config.mkvtoolnix_path = str(tmp_path / "gone")
+    dlg = SettingsDialog(window.config, window)
+    assert not dlg.mkv_invalid.isHidden()                    # shown as invalid
+    dlg.workers_spin.setValue(5)
+    dlg._save()
+    assert dlg.result() == dlg.DialogCode.Accepted and not dialogs.shown
+    assert load_config().default_workers == 5
+
+    dlg = SettingsDialog(window.config, window)
+    dlg.mkv_path_edit.clear()                                # the offered fix
+    assert dlg.mkv_invalid.isHidden()
+    dlg._save()
+    assert load_config().mkvtoolnix_path == ""
+
+    dlg = SettingsDialog(window.config, window)              # a NEW bad folder is refused
+    dlg.mkv_path_edit.setText(str(tmp_path / "typo"))
+    dlg._save()
+    assert dialogs.shown[-1][0] == "warn" and window.config.mkvtoolnix_path == ""
+
+
+# ── R2-03: uncertain encoding is shown ────────────────────────────────────────
+
+def test_preview_marks_uncertain_encoding(window, season):
+    write_srt(season / "Show - 02.srt", SRT_TEXT.replace("Hello", "Да"), "cp1251")
+    from core.engine import ProcessingEngine
+    scan = ProcessingEngine(window.config).scan_and_match(season)
+    window.preview_panel.populate(scan)
+    table = window.preview_panel.table
+    assert table.item(0, 4).text() == "READY"
+    assert table.item(1, 4).text() == "⚠ ENCODING"
+    assert table.item(1, 2).text().startswith("⚠ ")
+    assert "encoding uncertain — choose it in Encoding" in table.item(1, 2).toolTip()
+    assert "encoding uncertain — choose it in Encoding" in table.item(1, 4).toolTip()
+    assert "ENCODING UNCERTAIN" in window.preview_panel.summary_label.text()
+
+
+def test_sync_warns_on_uncertain_encoding_and_reloads_with_the_chosen_one(sync, dialogs, tmp_path):
+    path = write_srt(tmp_path / "ru.srt", SRT_TEXT.replace("Hello", "Да"), "cp1251")
+    sync.load_subtitle(str(path))
+    assert not sync.encoding_warn.isHidden()
+    assert sync.encoding_combo.currentData() == "auto"
+    sync.set_offset(1500)
+
+    sync._write(tmp_path / "out.srt")                        # refused while uncertain
+    assert dialogs.shown[-1][0] == "warn" and not (tmp_path / "out.srt").exists()
+
+    sync.encoding_combo.setCurrentIndex(sync.encoding_combo.findData("cp1251"))
+    assert sync.encoding_warn.isHidden()
+    assert sync._sub.encoding == "cp1251" and sync._cues[0].text == "Да"
+    assert sync._offset == 1500                               # same file: offset kept
+    sync._write(tmp_path / "out.srt")
+    assert "Да" in (tmp_path / "out.srt").read_text(encoding="utf-8-sig")
+
+    other = write_srt(tmp_path / "en.srt")
+    sync.load_subtitle(str(other))
+    assert sync.encoding_combo.currentData() == "auto" and sync.encoding_warn.isHidden()

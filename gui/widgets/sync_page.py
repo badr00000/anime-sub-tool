@@ -21,7 +21,9 @@ from PySide6.QtWidgets import (
 
 from core import subtitle_file as sf
 from core.constants import VIDEO_EXTENSIONS
-from core.subtitles import describe_encoding
+from core.subtitles import (
+    CHARSET_AUTO, CHARSET_CHOICES, ENCODING_UNCERTAIN, UNCERTAIN_HINT, describe_encoding,
+)
 from gui.dialogs import messages
 from gui.theme import Colors, add_glow, page_header, plain_tooltip
 
@@ -245,6 +247,23 @@ class SyncPage(QWidget):
         pl.setContentsMargins(18, 16, 18, 16)
         pl.setSpacing(10)
 
+        enc_cap = QLabel("SUBTITLE ENCODING")
+        enc_cap.setProperty("role", "fieldLabel")
+        enc_cap.setStyleSheet(f"color: {Colors.text_muted}; font-size: 10px;")
+        self.encoding_combo = QComboBox()
+        for label, value in CHARSET_CHOICES:
+            self.encoding_combo.addItem(label, value)
+        self.encoding_combo.setToolTip("Reload the subtitle with another encoding when its "
+                                       "text shows up as garbage.")
+        self.encoding_combo.currentIndexChanged.connect(self._on_encoding_chosen)
+        # Shown when auto-detect could not tell the encoding of the loaded file
+        self.encoding_warn = QLabel(f"⚠ Subtitle {UNCERTAIN_HINT} above. The text may look "
+                                    "garbled, and it cannot be saved until you do.")
+        self.encoding_warn.setTextFormat(Qt.TextFormat.PlainText)
+        self.encoding_warn.setProperty("role", "bad")
+        self.encoding_warn.setWordWrap(True)
+        self.encoding_warn.hide()
+
         cap = QLabel("SUBTITLE OFFSET")
         cap.setProperty("role", "fieldLabel")
         self.offset_lbl = QLabel()
@@ -318,6 +337,10 @@ class SyncPage(QWidget):
         self.saved_lbl.setWordWrap(True)
         self.saved_lbl.setProperty("role", "ok")
 
+        pl.addWidget(enc_cap)
+        pl.addWidget(self.encoding_combo)
+        pl.addWidget(self.encoding_warn)
+        pl.addSpacing(6)
         pl.addWidget(cap)
         pl.addWidget(self.offset_lbl)
         pl.addWidget(self.offset_hint)
@@ -425,9 +448,26 @@ class SyncPage(QWidget):
         except OSError:
             pass
 
-    def load_subtitle(self, path: str):
+    def _on_encoding_chosen(self, index: int):
+        """Reload the current subtitle with the encoding picked in the list."""
+        if self._sub is None or index < 0:
+            return
+        value = self.encoding_combo.itemData(index)
+        self.load_subtitle(str(self._sub.path), None if value == CHARSET_AUTO else value)
+
+    def _show_encoding(self, chosen: str | None):
+        """Select `chosen` (None = Auto) in the list without reloading, and show the
+        warning while the encoding of the loaded file is uncertain."""
+        self.encoding_combo.blockSignals(True)
+        self.encoding_combo.setCurrentIndex(max(0, self.encoding_combo.findData(chosen or CHARSET_AUTO)))
+        self.encoding_combo.blockSignals(False)
+        self.encoding_warn.setVisible(self._sub is not None
+                                      and self._sub.encoding == ENCODING_UNCERTAIN)
+
+    def load_subtitle(self, path: str, encoding: str | None = None):
+        """Load a subtitle; `encoding` (an id from the Encoding list) skips detection."""
         try:
-            sub = sf.load(path)
+            sub = sf.load(path, encoding)
         except (OSError, ValueError) as e:
             messages.warn(self, "Subtitle", f"Could not read this subtitle:\n\n{e}")
             return
@@ -436,17 +476,24 @@ class SyncPage(QWidget):
                           f"No subtitle lines were found in:\n\n{Path(path).name}\n\n"
                           "The file is empty or damaged.")
             return
+        # Re-reading the same file in another encoding keeps the offset found so far
+        same_file = self._sub is not None and sf.is_same_file(self._sub.path, path)
         self._sub = sub
         self._cues = sorted(sub.cues, key=lambda c: c.start_ms)
         self._starts = [c.start_ms for c in self._cues]
-        self._saved_offset = 0
+        if not same_file:
+            self._saved_offset = 0
         self.sub_field.edit.setText(path)
-        encoding = describe_encoding(sub.encoding)
+        described = describe_encoding(sub.encoding)
         self.sub_field.edit.setToolTip(plain_tooltip(
-            f"{path}\n{len(self._cues)} lines · encoding {encoding}"))
+            f"{path}\n{len(self._cues)} lines · encoding {described}"))
         self.saved_lbl.setText("")
-        self.set_offset(0)
-        self.status_message.emit(f"Loaded {len(self._cues)} subtitle lines ({encoding})")
+        self._show_encoding(encoding)
+        self.set_offset(self._offset if same_file else 0)
+        status = f"Loaded {len(self._cues)} subtitle lines ({described})"
+        if sub.encoding == ENCODING_UNCERTAIN:
+            status += f" — {UNCERTAIN_HINT}"
+        self.status_message.emit(status)
         self._update_buttons()
 
     def _browse_video(self):
@@ -588,6 +635,12 @@ class SyncPage(QWidget):
         if not self._sub:
             return
         target = Path(target)
+        if self._sub.encoding == ENCODING_UNCERTAIN:
+            # Saving would write the unreadable characters into the copy for good
+            messages.warn(self, "Choose the encoding first",
+                          f"The subtitle {UNCERTAIN_HINT} (SUBTITLE ENCODING, on the right). "
+                          "Pick the one that makes the text readable, then save.")
+            return
         # Saving onto the loaded file (Save As onto it, or Save for a file that is
         # already a '.synced' copy) destroys the source: only after an explicit yes.
         force = False

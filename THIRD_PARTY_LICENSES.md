@@ -8,11 +8,21 @@ contains all of them; this file is shipped inside it and shown by
 ## MKVToolNix (mkvmerge) v100.0 — GNU General Public License, version 2
 
 - Program: `mkvmerge.exe`, bundled unmodified in `bin/` and run as a separate program.
+- Exact version: MKVToolNix 100.0 ('Do Hot Girls Like Chords'), 64-bit Windows
+  build, as published by the MKVToolNix project (`mkvmerge --version` prints
+  `mkvmerge v100.0 ('Do Hot Girls Like Chords') 64-bit`).
 - Copyright (C) Moritz Bunkus and the MKVToolNix contributors.
 - Home page and official binaries: https://mkvtoolnix.download/
-- Complete corresponding source code: https://codeberg.org/mbunkus/mkvtoolnix
-  (the source of the bundled version is the tag `release-100.0`; source archives
-  are also published at https://mkvtoolnix.download/source.html).
+- Complete corresponding source code of this exact version: the MKVToolNix
+  release page for 100.0, https://mkvtoolnix.download/source.html (archive
+  `mkvtoolnix-100.0.tar.xz`), and the tag `release-100.0` of
+  https://codeberg.org/mbunkus/mkvtoolnix
+- Written offer: for at least three years after the last time this application
+  is distributed, its author will give anyone who asks a complete copy of the
+  corresponding source code of the bundled mkvmerge (MKVToolNix 100.0), on a
+  medium customarily used for software interchange, for no more than the cost of
+  physically providing it. Ask through the project's issue tracker or the
+  contact given where you obtained the application.
 - Licence: GNU GPL version 2. The full text is in `licenses/GPL-2.0.txt`
   and follows this list in the About -> Licenses window.
 
@@ -56,12 +66,6 @@ more); their notices are part of the MKVToolNix source distribution above.
 - File system monitoring. Copyright (C) Yesudeep Mangalapilly, Google Inc. and contributors.
 - Source: https://github.com/gorakhargosh/watchdog
 - Licence text: https://www.apache.org/licenses/LICENSE-2.0
-
-## charset-normalizer — MIT License
-
-- Character set detection. Copyright (C) Ahmed TAHRI (Ousret).
-- Source: https://github.com/jawah/charset_normalizer
-- Licence text: https://github.com/jawah/charset_normalizer/blob/master/LICENSE
 
 ## Python and PyInstaller (executable only)
 

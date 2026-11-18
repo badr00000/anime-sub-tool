@@ -245,3 +245,69 @@ def test_same_folder_output_survives_a_second_run(tmp_path, engine):
     assert len(tracks(out, "subtitles")) == 1                       # still the good output
     assert sorted(p.name for p in tmp_path.iterdir()) == [
         "Show - 01 [AnimeSubTool].mkv", "Show - 01.mkv", "Show - 01.srt"]
+
+
+def _srt_time(ms: int) -> str:
+    h, rem = divmod(ms, 3_600_000)
+    m, rem = divmod(rem, 60_000)
+    s, ms = divmod(rem, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def test_force_cancel_kills_a_real_mkvmerge_mid_write(tmp_path):
+    """R2-01 with the real binary. On Windows a terminated mkvmerge exits with code 1
+    (= 'warnings'); the truncated file must still be thrown away, never renamed."""
+    import threading
+    from core.matcher import match_files, scan_folder
+    from core.processor import EpisodeProcessor
+
+    # 24 MB of audio: mkvmerge flushes its write buffer (~20 MB) to disk early, so
+    # the killed run leaves a real truncated file, as in the reported bug
+    wav = make_wav(tmp_path / "audio.wav", seconds=1500)
+    subprocess.run([str(MKVMERGE), "-q", "-o", str(tmp_path / "Show - 01.mkv"), str(wav)],
+                   check=True, capture_output=True)
+    wav.unlink()
+    # ~150 000 subtitle lines keep mkvmerge writing for several seconds
+    with open(tmp_path / "Show - 01.srt", "w", encoding="utf-8", newline="\n") as f:
+        for i in range(150_000):
+            f.write(f"{i + 1}\n{_srt_time(i * 100)} --> {_srt_time(i * 100 + 90)}\nLine {i}\n\n")
+    videos, subs = scan_folder(tmp_path)
+    match = match_files(videos, subs)[0][0]
+
+    tools = MKVToolsWrapper("")
+    processor = EpisodeProcessor(tools, ProcessingOptions())
+    output = tmp_path / "PROCESSED" / "Show - 01.mkv"
+    partial = output.with_name(output.name + ".partial")
+    holder = {}
+    progress = []
+    thread = threading.Thread(target=lambda: holder.setdefault(
+        "result", processor.process(match, progress_callback=progress.append)))
+    thread.start()
+
+    def written() -> int:
+        # The size in the directory entry lags behind on Windows; ask an open handle
+        try:
+            with open(partial, "rb") as f:
+                return f.seek(0, 2)
+        except OSError:
+            return 0
+
+    # Kill once the partial file holds data while mkvmerge still reports progress < 100%
+    sizes = []
+    stop = threading.Event()
+    while thread.is_alive() and not stop.wait(0.02):
+        sizes.append(written())
+        if sizes[-1] > 0 and progress and progress[-1] < 100:
+            break
+    assert thread.is_alive(), "mkvmerge finished before it could be stopped"
+    tools.terminate_all()
+    thread.join(60)
+
+    assert sizes and sizes[-1] > 0
+    result = holder["result"]
+    assert result.status == S.CANCELLED, result.message
+    assert not output.exists() and not partial.exists()
+
+    # The next run is not fooled into 'already exists'
+    rerun = EpisodeProcessor(MKVToolsWrapper(""), ProcessingOptions())
+    assert rerun._precheck(match) is None
