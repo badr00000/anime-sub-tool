@@ -87,6 +87,8 @@ def scan(folder):
             else:
                 score, score_color = "-", 'red'
             safe_echo(f"  {ep:<6} {vid:<40} {sub:<40} {click.style(score, fg=score_color)}")
+            if match.language_warning:
+                safe_echo(click.style(f"         [!] Check: {match.language_warning}", fg='yellow'))
 
         if result.unmatched_videos:
             safe_echo(f"\n  {click.style(f'[!] {len(result.unmatched_videos)} unmatched video(s)', fg='yellow')}")
@@ -144,6 +146,17 @@ def _check_languages(ctx, param, value):
     return codes
 
 
+# --keep-subs all: keep every original subtitle (the same as --keep-original-subs)
+KEEP_ALL = "all"
+
+
+def _check_keep_subs(ctx, param, value):
+    """Like _check_languages, but 'all' means keep every original subtitle."""
+    if value is not None and value.strip().lower() == KEEP_ALL:
+        return KEEP_ALL
+    return _check_languages(ctx, param, value)
+
+
 def _processing_options(func):
     """Options shared by `preview` and `process`, so the preview shows what process will do."""
     decorators = [
@@ -162,11 +175,12 @@ def _processing_options(func):
                      help="Audio languages to keep, comma separated (jpn, ja, eng, ...). "
                           "'all' or '' keeps every audio track. Default: jpn (an episode "
                           "without Japanese audio keeps all of its audio)"),
-        click.option('--keep-subs', 'keep_subs', default=None, callback=_check_languages,
+        click.option('--keep-subs', 'keep_subs', default=None, callback=_check_keep_subs,
                      metavar='LANGS',
                      help="Original subtitle languages NOT removed, comma separated "
                           "(default: none, every original subtitle is removed). "
-                          "Ignored with --keep-original-subs"),
+                          "'all' keeps every original subtitle (same as "
+                          "--keep-original-subs). Ignored with --keep-original-subs"),
         click.option('--keep-original-subs', is_flag=True,
                      help='Keep the subtitles already inside each episode (default: remove them)'),
         click.option('--overwrite', is_flag=True,
@@ -184,7 +198,10 @@ def _build_options(config, output, offset, sub_charset, keep_original_subs, over
     opts = ProcessingOptions.from_config(config)
     if keep_audio is not None:
         opts.keep_audio_langs = keep_audio
-    if keep_subs is not None:
+    if keep_subs == KEEP_ALL:
+        keep_original_subs = True
+        opts.keep_sub_langs = []
+    elif keep_subs is not None:
         opts.keep_sub_langs = keep_subs
     opts.output_dir = Path(output).resolve() if output else None
     opts.subtitle_offset_ms = round(offset * 1000)

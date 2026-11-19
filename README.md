@@ -25,7 +25,24 @@ It also includes a small standalone tool to fix subtitle timing (Sync Subtitle).
     `OVA` / `Special` files are only paired with a subtitle that is also marked
     `OVA` / `Special`;
   - a multi-episode file such as `01-02` is matched by its first number;
-  - if `Show - 01.srt` and `Show - 01.synced.srt` both exist, the synced copy is used.
+  - if `Show - 01.srt` and `Show - 01.synced.srt` both exist, the synced copy is used;
+  - when several files compete for the same subtitle, the best-matching pair wins
+    whatever the file order: `5 Centimeters per Second (2007).mkv` (read as
+    episode 5) does not take `Show - 05.srt` away from `Show - 05.mkv`;
+  - **films and other files without an episode number** pair on their name, with
+    bracket tags, release tags (`1080p`, `BluRay`, `x265`, …), years, a trailing
+    scene group (`-GROUP`) and the subtitle's language code ignored:
+    `Suzume.2022.1080p.BluRay.x265-GROUP.mkv` pairs with `Suzume.ar.srt` or
+    `Suzume.2022.ar.srt`. A title that is only a year (`1917`) is kept. Language
+    codes are only removed from subtitle names (`Tenki.no.Ko.mkv` keeps its `Ko`);
+  - **language tags**: a subtitle name may say its language — a suffix such as
+    `.ar`, `.ara`, `.en`, `.eng`, `.ja` (any code, alias or name the language
+    dropdowns know) or a bracket such as `(English)`, `[ENG]`, `(عربي)`, `[Arabic]`.
+    A subtitle in the language you chose for the new track (Subtitle *Language*
+    option, default from Settings) wins, then one without a tag; one tagged with
+    another language never beats those. If it is the only candidate it is still
+    paired, but the row is flagged `⚠ CHECK` ("subtitle looks like English, track
+    will be labelled Arabic"). The detected tag is shown in the subtitle's tooltip.
 - **Track cleanup** — keep only the audio languages you choose, remove (or
   keep) the subtitles already inside the episode, optionally relabel an
   existing subtitle track.
@@ -57,6 +74,13 @@ It also includes a small standalone tool to fix subtitle timing (Sync Subtitle).
 2. **Preview** — the table lists every episode, the subtitle it was paired
    with, the title similarity and a status (`READY`, `⚠ CHECK`, `NO SUB`).
    Adjust the options on the right if needed.
+   **Fix a pairing by hand:** double-click a SUBTITLE FILE cell (or select the
+   row and press Enter, Space or F2) and pick any subtitle of the folder, or
+   `— none —`. The row then shows `MANUAL`, and the counters update. A subtitle
+   can belong to one episode only: picking one that another episode had moves it
+   (that episode is left without a subtitle). Processing uses the pairs as shown.
+   Choices made by hand are kept when you change the subtitle language, but a
+   rescan of the folder (including an automatic one from *Watch folder*) resets them.
 3. Click **START PROCESSING**. Up to 8 episodes are processed at once
    (default 4; change it with *Episodes at once*). **CANCEL** lets running
    episodes finish and skips the rest.
@@ -111,12 +135,14 @@ py -3.11 main.py --help
 `process` options: `--workers N` (1-8), `--output DIR`, `--dry-run`, `--yes`,
 `--offset SECONDS`, `--sub-charset NAME`, `--keep-audio LANGS`, `--keep-subs LANGS`,
 `--keep-original-subs`, `--overwrite`, `--include-unmatched`.
+`--offset` accepts -3600 to 3600 seconds (the same ±1 hour limit as the GUI).
 
 By default `process` keeps only Japanese audio (every audio track when an episode
 has no Japanese one) and removes every subtitle already in the episode.
 `--keep-audio jpn,eng` keeps those audio languages, `--keep-audio all` keeps all
 audio; `--keep-subs eng` keeps the original English subtitles while removing the
-rest. Any spelling works (`ja`, `jpn`, `ja-JP`). When the new subtitle is set as
+rest, and `--keep-subs all` keeps every original subtitle (the same as
+`--keep-original-subs`). Any spelling works (`ja`, `jpn`, `ja-JP`). When the new subtitle is set as
 default, kept original subtitles lose their default flag. Defaults (language, track name, workers, subfolder,
 MKVToolNix folder) come from the same settings file the GUI uses.
 

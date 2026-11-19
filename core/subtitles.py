@@ -211,19 +211,29 @@ def _plausible_cjk(text: str, encoding: str, codec: str) -> bool:
     chars = [(i, c) for i, c in enumerate(text) if ord(c) > 127]
     if not chars:
         return False
-    ascii_trail = 0
-    for _, c in chars:
+    ascii_trailed = set()
+    for i, c in chars:
         try:
             encoded = c.encode(codec)
         except UnicodeEncodeError:
             continue
         if len(encoded) == 2 and 0x40 <= encoded[1] <= 0x7E:
-            ascii_trail += 1
-    if ascii_trail / len(chars) > _MAX_ASCII_TRAIL_SHARE[encoding]:
+            ascii_trailed.add(i)
+    if len(ascii_trailed) / len(chars) > _MAX_ASCII_TRAIL_SHARE[encoding]:
         return False
     letters = [i for i, c in chars if c.isalpha()]
-    glued = sum(1 for i in letters if _touches_ascii_letter(text, i))
-    return not letters or glued / len(letters) <= _MAX_MIXED_SHARE
+    if not letters:
+        return True
+    glued = [i for i in letters if _touches_ascii_letter(text, i)]
+    if len(letters) >= _STRONG_CJK_EVIDENCE:
+        # Plenty of CJK text: a character glued to an English word ('John이',
+        # '用LINE联系') is only suspicious when one of its bytes is ASCII. Western
+        # text read wrongly ('I’m' -> 'I뭢') always builds its "characters" from a
+        # high byte plus the ASCII letter after it, and those "characters" are
+        # rare ones. A real Hangul / GB2312 character next to Latin letters uses
+        # two high bytes; Big5 (whose trail byte may be ASCII) gives common Hanzi.
+        glued = [i for i in glued if i in ascii_trailed and text[i] not in _COMMON_HANZI]
+    return len(glued) / len(letters) <= _MAX_MIXED_SHARE
 
 
 def _detect_cjk(data: bytes) -> Optional[tuple[str, int]]:
@@ -290,6 +300,13 @@ _ARABIC = _freq(
     "ح2 ج1.5 ى1.5 ش1 ص1 خ1 ط0.8 ء0.3 ئ0.3 ؤ0.2 ذ0.8 ز0.5 ث0.5 غ0.4 ض0.4 ظ0.2 ـ0.1 "
     # Persian and Urdu letters Windows-1256 also holds
     "پ0.4 چ0.4 ژ0.05 گ0.6 ک1 ٹ0.05 ڈ0.05 ڑ0.05 ں0.1 ھ0.1 ہ0.2 ے0.2")
+# Urdu as Windows-1256 writes it: that code page has no Farsi yeh (U+06CC), so
+# the Arabic yeh stands in for it; heh goal (ہ), yeh barree (ے), keheh (ک),
+# noon ghunna (ں) and do-chashmi heh (ھ) are among the most frequent letters.
+_URDU = _freq(
+    "ا10 ي8.5 ک4.8 ے4.5 ہ4.4 ر4.6 ن4.5 و4.3 م3.8 ت3 ب2.5 ل2.5 س2.6 ں1.6 د1.6 ھ1.8 "
+    "ج1.4 گ1.4 پ1 ئ0.8 آ0.7 ع0.8 چ0.6 ٹ0.6 ق0.6 ف0.6 ش0.6 ح0.6 خ0.5 ز0.5 ڈ0.4 ڑ0.4 "
+    "ه0.8 ص0.3 ط0.2 غ0.2 ء0.2 ض0.1 ظ0.1 ذ0.1 ث0.1 ى0.1 ة0.05 ؤ0.05 أ0.05 إ0.02 ژ0.02")
 _THAI = _freq(
     "า8.5 น6.5 ร5.5 อ5.3 ก5 เ4.8 ง4.5 ม4 ่4.2 ย3.4 ล3.3 ว3 ด3 ั3.4 ท2.7 ส2.5 ไ2.3 ้2.8 "
     "ี2.5 ิ2.6 บ2.2 ค2.3 ะ2 ห2 ต2 ป1.6 พ1.4 ุ1.3 จ1.3 แ1.4 ข1.1 ็1 ู0.8 ใ0.9 โ0.7 ช1 "
@@ -305,6 +322,7 @@ def _entropy(table: dict[str, float]) -> float:
 # (tashkeel) and Hebrew points are optional decoration and are left out.
 _SCRIPT_CANDIDATES = [
     ("cp1256", _ARABIC, False, False),
+    ("cp1256", _URDU, False, False),
     ("cp1251", _RUSSIAN, True, False),
     ("koi8_r", _RUSSIAN, True, False),
     ("cp1253", _GREEK, True, False),
@@ -373,7 +391,13 @@ def _detect_script(data: bytes) -> Optional[str]:
             scores.append((result[0], result[1], encoding))
     if not scores:
         return None
-    scores.sort(reverse=True)
+    # One score per code page (Arabic and Urdu are both Windows-1256): the lead
+    # is measured against the best OTHER code page.
+    best_per_page: dict[str, tuple] = {}
+    for item in scores:
+        if item[2] not in best_per_page or item > best_per_page[item[2]]:
+            best_per_page[item[2]] = item
+    scores = sorted(best_per_page.values(), reverse=True)
     best, count, encoding = scores[0]
     lead = best - scores[1][0] if len(scores) > 1 else math.inf
     if count >= _MIN_EVIDENCE and best >= _MIN_LOG_LIKELIHOOD and lead >= _MIN_LEAD:

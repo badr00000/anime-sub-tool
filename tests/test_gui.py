@@ -119,11 +119,11 @@ def test_double_scan_does_not_crash_and_reruns_once(window, season, monkeypatch)
     gate = threading.Event()             # the first scan stays inside until released
     original = ProcessingEngine.scan_and_match
 
-    def gated_scan(self, folder):
+    def gated_scan(self, folder, *args):
         calls.append(folder)
         entered.set()
         assert gate.wait(10)
-        return original(self, folder)
+        return original(self, folder, *args)
 
     monkeypatch.setattr(ProcessingEngine, "scan_and_match", gated_scan)
     window.folder_picker.set_path(str(season))

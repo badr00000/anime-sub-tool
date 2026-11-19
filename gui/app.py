@@ -53,17 +53,20 @@ class ScanWorker(QThread):
     completed = Signal(object)
     error = Signal(str)
 
-    def __init__(self, folder_path: str, config: AppConfig, auto: bool = False):
+    def __init__(self, folder_path: str, config: AppConfig, auto: bool = False,
+                 subtitle_language: str | None = None):
         super().__init__()
         self.folder_path = folder_path
         self.config = config
+        # Language the new track will be labelled with: subtitles named for it win
+        self.subtitle_language = subtitle_language
         # True when the watcher started this scan: no dialogs, the user did not ask for it
         self.auto = auto
 
     def run(self):
         try:
             engine = ProcessingEngine(self.config)
-            self.completed.emit(engine.scan_and_match(self.folder_path))
+            self.completed.emit(engine.scan_and_match(self.folder_path, self.subtitle_language))
         except Exception as e:
             logger.exception("Scan failed")
             self.error.emit(str(e))
@@ -208,7 +211,11 @@ class AnimeSubToolApp(QMainWindow):
         s2_layout.setSpacing(14)
 
         self.preview_panel = PreviewPanel()
+        self.preview_panel.status_message.connect(self.status_bar_message)
         self.options_panel = OptionsPanel(self.config)
+        # The pairing prefers subtitles named for the chosen language: match again
+        self.options_panel.sub_lang_combo.currentIndexChanged.connect(
+            lambda _=None: self._on_subtitle_language_changed())
         self.options_panel.setFixedWidth(340)
 
         split = QHBoxLayout()
@@ -409,7 +416,8 @@ class AnimeSubToolApp(QMainWindow):
         self.scan_btn.setText("SCANNING…")
         self.status_bar.showMessage("Scanning folder...")
 
-        worker = ScanWorker(path, self.config, auto=auto)
+        worker = ScanWorker(path, self.config, auto=auto,
+                            subtitle_language=self._subtitle_language())
         worker.completed.connect(self._on_scan_completed)
         worker.error.connect(self._on_scan_error)
         worker.finished.connect(self._on_scan_finished)
@@ -446,13 +454,24 @@ class AnimeSubToolApp(QMainWindow):
                     "contains episode files (.mkv, .mp4, ...).")
             return
 
-        self.preview_panel.populate(result)
+        matched_for = getattr(self.sender(), "subtitle_language", None)
+        self.preview_panel.populate(
+            result, matched_for if matched_for is not None else self.config.subtitle_language)
+        # The language may have been changed while the scan ran
+        self.preview_panel.set_subtitle_language(self._subtitle_language())
         self._go_to_step(1)
 
     def _on_scan_error(self, err):
         self.status_bar.showMessage("Scan failed")
         if not getattr(self.sender(), "auto", False):
             messages.error(self, "Scan Error", f"Failed to scan folder:\n\n{err}")
+
+    def _subtitle_language(self) -> str:
+        return self.options_panel.get_options().subtitle_language
+
+    def _on_subtitle_language_changed(self):
+        if self.scan_result is not None and self._merge_step == 1:
+            self.preview_panel.set_subtitle_language(self._subtitle_language())
 
     # ─── Step 2: Process ───
 

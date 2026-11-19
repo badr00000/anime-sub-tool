@@ -106,3 +106,43 @@ def display(code: str) -> str:
 def name_of(code: str) -> str:
     """'ara' -> 'Arabic' (used as the default track name)."""
     return NAMES.get(normalize(code), code)
+
+
+# Words release names use for a language besides the codes and names above
+_EXTRA_WORDS = {
+    "chs": "chi", "cht": "chi", "chinese simplified": "chi", "chinese traditional": "chi",
+    "jap": "jpn", "arab": "ara", "arb": "ara", "farsi": "per", "brazilian": "por",
+    "castellano": "spa", "latino": "spa", "espanol": "spa", "español": "spa",
+    "francais": "fre", "français": "fre", "deutsch": "ger", "italiano": "ita",
+    "portugues": "por", "português": "por", "russkiy": "rus", "turkce": "tur", "türkçe": "tur",
+}
+
+
+def _build_words() -> dict[str, str]:
+    words: dict[str, str] = {}
+    for code, name in LANGUAGES:
+        words[code] = code
+        words[name.lower()] = code
+        for arabic in ARABIC_NAMES.get(code, "").split():
+            words[arabic] = code
+    words.update(_ALIASES)
+    words.update(_EXTRA_WORDS)
+    return words
+
+
+_WORDS = _build_words()
+
+
+def lookup(word: str | None) -> str:
+    """The language a word of a file name stands for, '' when it is none:
+    'en', 'ENG', 'English', 'pt-BR', 'عربي', 'Arabic' -> 'eng' / 'por' / 'ara'."""
+    if not word:
+        return ""
+    w = " ".join(word.strip().lower().replace("_", " ").split())
+    if w in _WORDS:
+        return _WORDS[w]
+    # 'en-US', 'pt-BR', 'zh-Hans'
+    head = w.split("-")[0]
+    if head != w and head in _WORDS and len(head) <= 3:
+        return _WORDS[head]
+    return ""

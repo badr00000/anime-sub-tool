@@ -41,6 +41,8 @@ class MatchConfidence(Enum):
     MEDIUM = auto()
     LOW = auto()
     NO_MATCH = auto()
+    # Chosen by the user in the Preview step
+    MANUAL = auto()
 
 
 # ──────────────────────────────────────────────────────────────
@@ -91,6 +93,9 @@ class EpisodeInfo:
     encoding: str = ""
     # Release version: 2 for 'Show - 01v2', else 1.
     version: int = 1
+    # Subtitles only: language the name says ('eng' for 'Show - 01.en.srt' or
+    # 'Show - 01 (English).srt'); '' when the name does not say.
+    language: str = ""
 
     @property
     def label(self) -> str:
@@ -107,6 +112,14 @@ class EpisodeMatch:
     subtitle: Optional[EpisodeInfo] = None
     confidence: MatchConfidence = MatchConfidence.NO_MATCH
     score: float = 0.0
+    # Language the subtitle's name says it is in ('' = not stated)
+    subtitle_language: str = ""
+    # Set when that language is not the one the track will be labelled with
+    language_warning: str = ""
+
+    @property
+    def is_manual(self) -> bool:
+        return self.confidence == MatchConfidence.MANUAL
 
     @property
     def is_matched(self) -> bool:
