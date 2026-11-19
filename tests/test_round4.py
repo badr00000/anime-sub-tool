@@ -107,8 +107,12 @@ def test_wanted_language_wins(subs, wanted, chosen):
 
 
 def test_other_language_never_beats_untagged_even_with_a_better_title():
-    got, _, _, _ = pairs(["Show - 01.mkv"], ["Show - 01.en.srt", "[Fansub] Other Title - 01.srt"])
-    assert got == {"Show - 01.mkv": "[Fansub] Other Title - 01.srt"}
+    # R5-05 narrowed this rule: it holds while the untagged title scores at least
+    # 50 (another spelling of the same show); an unrelated show (< 50) now loses,
+    # see test_round5.py::test_unrelated_untagged_show_loses_to_another_language
+    got, matches, _, _ = pairs(["Show - 01.mkv"], ["Show - 01.en.srt", "[Fansub] The Show - 01.srt"])
+    assert got == {"Show - 01.mkv": "[Fansub] The Show - 01.srt"}
+    assert 50 <= matches[0].score < 80
 
 
 def test_only_candidate_in_another_language_is_paired_with_a_warning():
@@ -400,8 +404,10 @@ def test_pick_another_subtitle_none_and_move(window, season):
     panel.choose_subtitle(0, sub_named(panel, "Show - 02.srt"))
     matches = panel.scan_result.matches
     assert matches[0].subtitle.filename == "Show - 02.srt"
-    assert matches[1].subtitle is None and matches[1].is_manual
+    # R5-08: the emptied row is a normal NO SUB row, not one chosen by hand
+    assert matches[1].subtitle is None and not matches[1].is_manual and matches[1].moved_to == "1"
     assert row_texts(panel, 1)[4] == "NO SUB"
+    assert row_texts(panel, 1)[2].startswith("— none (moved to EP 1) —")
     assert "moved from episode 2" in messages[-1]
     used = [m.subtitle.filepath for m in matches if m.subtitle]
     assert len(used) == len(set(used))                                     # one row per subtitle

@@ -116,6 +116,10 @@ class EpisodeMatch:
     subtitle_language: str = ""
     # Set when that language is not the one the track will be labelled with
     language_warning: str = ""
+    # Other reasons to check the pair (season only assumed, partial track); '' = none
+    note: str = ""
+    # No subtitle because the user moved it to this episode ('5'); '' otherwise
+    moved_to: str = ""
 
     @property
     def is_manual(self) -> bool:

@@ -196,6 +196,23 @@ def _bracket_language(stem: str) -> str:
     return ""
 
 
+# A number that reads as an episode even when it looks like a year: right after
+# a dash ('Show - 2023', 'One Piece - 1071'), glued to E ('S01E2023'), after
+# 'Ep' / 'Episode' or '#'.
+_EPISODE_CONTEXT = r'(?:-\s*|(?i:(?<![a-z])(?:e|ep\.?\s*|episode\s*))|#\s*)0*{}(?!\d)'
+
+
+def _is_year_not_episode(stem: str, episode_num: Optional[str]) -> bool:
+    """True when the 'episode number' is a bare 19xx/20xx year: 'Perfect Blue
+    1997', 'Your Name 2016', 'Movie_2020_1080p'. A year-like number right after
+    ' - ', E, Ep, Episode or # stays an episode number ('Show - 2023' is episode
+    2023, as fansub releases of long series are named). '1917' alone is not an
+    episode either: with nothing else in the name it is the title of a film."""
+    if not episode_num or not re.fullmatch(r'(?:19|20)\d\d', episode_num):
+        return False
+    return not re.search(_EPISODE_CONTEXT.format(episode_num), stem)
+
+
 def extract_episode_info(filepath: Path) -> EpisodeInfo:
     """Parse filename using anitopy first, then regex fallback patterns."""
     filename = filepath.name
@@ -204,6 +221,14 @@ def extract_episode_info(filepath: Path) -> EpisodeInfo:
     if is_synced_copy(filepath):
         parse_name = filepath.stem[:-len(_SYNCED_SUFFIX)] + filepath.suffix
     parse_stem = Path(parse_name).stem
+    is_subtitle = filepath.suffix.lower() in SUBTITLE_EXTENSIONS
+    # A subtitle is parsed without its trailing language code ('Perfect Blue
+    # 1997.ar.srt' as 'Perfect Blue 1997.srt'), so it parses like its video. The
+    # language itself is still read from the full name below.
+    full_stem = parse_stem
+    if is_subtitle:
+        parse_stem = _strip_language_suffix(parse_stem)
+        parse_name = parse_stem + filepath.suffix
 
     episode_num = None
     series_title = None
@@ -215,6 +240,8 @@ def extract_episode_info(filepath: Path) -> EpisodeInfo:
         episode_num = normalize_episode_num(parsed.get("episode_number"))
         series_title = parsed.get("anime_title")
         season = parsed.get("anime_season")
+        if _is_year_not_episode(parse_stem, episode_num):
+            episode_num = None
 
     season = _parse_season(parse_name, season)
     extra_kind = _extra_kind(parse_stem)
@@ -227,16 +254,21 @@ def extract_episode_info(filepath: Path) -> EpisodeInfo:
             match = re.search(pattern, parse_name, re.IGNORECASE)
             if match:
                 episode_num = normalize_episode_num(match.group(1))
+                if _is_year_not_episode(parse_stem, episode_num):
+                    episode_num = None      # 'Perfect Blue 1997.mkv' is a film
+                    continue
                 break
 
     if not episode_num:
         # Final fallback: any standalone number, after removing bracketed tags,
         # the extension and numbers that are clearly not episodes (1080p, x264, 2004...).
         cleaned = re.sub(r'\[.*?\]|\(.*?\)', ' ', parse_stem)
-        cleaned = _NON_EPISODE_NUMBERS.sub(' ', cleaned)
-        match = re.search(r'(?<!\d)(\d{1,4})(?!\d)', cleaned)
-        if match:
-            episode_num = normalize_episode_num(match.group(1))
+        cleaned = _NON_EPISODE_NUMBERS.sub(' ', cleaned.replace('_', ' '))
+        for match in re.finditer(r'(?<!\d)(\d{1,4})(?!\d)', cleaned):
+            candidate = normalize_episode_num(match.group(1))
+            if not _is_year_not_episode(parse_stem, candidate):
+                episode_num = candidate
+                break
 
     # Try to clean up series title if missing
     if not series_title:
@@ -249,8 +281,8 @@ def extract_episode_info(filepath: Path) -> EpisodeInfo:
             series_title = clean_name.strip()
 
     language = ""
-    if filepath.suffix.lower() in SUBTITLE_EXTENSIONS:
-        language = subtitle_language_tag(parse_stem)
+    if is_subtitle:
+        language = subtitle_language_tag(full_stem)
 
     return EpisodeInfo(
         filepath=filepath,
@@ -468,6 +500,89 @@ def language_warning(tag: str, wanted: str) -> str:
             f"track will be labelled {_language_name(wanted)}")
 
 
+# Words that mark a subtitle as a partial or alternative track, not the full
+# dialogue: 'Show - 03 [Signs].ass', 'Show - 03.forced.srt', 'Show - 03 - Copy.srt'.
+_PARTIAL_WORDS = frozenset({
+    "signs", "songs", "s&s", "forced", "karaoke", "commentary", "sdh", "cc", "alt", "old",
+    "copy", "preview",
+})
+_TOKEN = re.compile(r'[^\W_]+(?:\s*&\s*[^\W_]+)*')
+
+
+def _tokens(text: str) -> set[str]:
+    """Lower-case words of a name; 'Signs & Songs' gives 'signs&songs', 'signs', 'songs'."""
+    words = set()
+    for token in _TOKEN.findall(text.lower()):
+        token = re.sub(r'\s+', '', token)
+        words.add(token)
+        if "&" in token:
+            words.update(part for part in token.split("&") if part)
+    return words
+
+
+def _partial_words(video: EpisodeInfo, subtitle: EpisodeInfo) -> list[str]:
+    """The partial-track words in the subtitle's name that the video's name does
+    not share (a title such as 'Old Boy' is in both names and does not count)."""
+    found = (_tokens(_comparable_stem(subtitle)) - _tokens(video.filepath.stem)) & _PARTIAL_WORDS
+    return sorted(found)
+
+
+def _name_core(info: EpisodeInfo) -> str:
+    """The name that should equal the video's for a perfect fit: without the
+    '.synced' marker, the language suffix or language bracket (subtitles) and the
+    release version."""
+    stem = _comparable_stem(info)
+    if _is_subtitle(info):
+        stem = _strip_language_suffix(stem)
+        for bracket in reversed(list(_BRACKET.finditer(stem))):
+            if _lookup_language(_SUB_WORDS.sub("", bracket.group(1).strip())):
+                stem = stem[:bracket.start()] + stem[bracket.end():]
+                break
+    stem = _VERSION.sub("", stem)
+    return " ".join(stem.split())
+
+
+def _name_fit(video: EpisodeInfo, subtitle: EpisodeInfo) -> int:
+    """0 when the subtitle is named exactly like the video, else minus the length
+    of the text the two names do not share (after their common start)."""
+    a, b = _name_core(video), _name_core(subtitle)
+    if a == b:
+        return 0
+    common = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        common += 1
+    return -((len(a) - common) + (len(b) - common))
+
+
+# 'Detective Conan Movie 26', 'Film 3', 'Gekijouban ...': a film of a series
+_FILM_MARKER = re.compile(r'(?<![a-z])(?:movie|film|gekij[oō]u?ban)(?![a-z])|劇場版', re.IGNORECASE)
+
+
+def _is_film_marked(info: EpisodeInfo) -> bool:
+    return bool(_FILM_MARKER.search(_comparable_stem(info)))
+
+
+_CONFIDENCE_ORDER = (MatchConfidence.EXACT, MatchConfidence.HIGH, MatchConfidence.MEDIUM,
+                     MatchConfidence.LOW)
+
+
+def _at_most(confidence: MatchConfidence, cap: MatchConfidence) -> MatchConfidence:
+    if confidence in _CONFIDENCE_ORDER and \
+            _CONFIDENCE_ORDER.index(confidence) < _CONFIDENCE_ORDER.index(cap):
+        return cap
+    return confidence
+
+
+def _season_note(video: EpisodeInfo, subtitle: EpisodeInfo) -> str:
+    if video.season and video.season > 1:
+        return (f"the episode is season {video.season} but the subtitle's name states no "
+                "season; make sure it is the same season")
+    return (f"the subtitle is season {subtitle.season} but the episode's name states no "
+            "season; make sure it is the same season")
+
+
 def _score_tier(score: float) -> int:
     """The confidence band of a title score: within a band the language decides."""
     return 2 if score >= 80 else 1 if score >= 50 else 0
@@ -486,10 +601,23 @@ def match_files(videos: list[EpisodeInfo], subtitles: list[EpisodeInfo],
     Every possible pair of a match key is ranked and the best pairs are taken
     first, whatever the order of the files: '5 Centimeters per Second.mkv' (read
     as episode 5) never takes 'Show - 05.srt' from 'Show - 05.mkv'. Ranking, best
-    first: a video without a stray marker word; a subtitle not tagged with another
-    language than `subtitle_language`; the title-score band; tagged with the
-    wanted language over untagged; the exact score; the release version; a
-    synced copy.
+    first:
+      1. a video without a stray marker word;
+      2. the same season (a name without a season counts as season 1, so
+         'Show - 01' prefers 'Show - 01.srt' over 'Show S2 - 01.srt');
+      3. a title score of at least 50 (an unrelated show never beats the right one);
+      4. a subtitle not tagged with another language than `subtitle_language`;
+      5. a full track over a partial one (signs, songs, forced, karaoke,
+         commentary, SDH, CC, alt, old, copy, preview);
+      6. the title-score band; tagged with the wanted language over untagged;
+         the exact score;
+      7. the name fit (named exactly like the video best);
+      8. the release version; a synced copy;
+      9. finally the file names, so the result never depends on the file order.
+    A pair that only matches because one name states no season, or whose
+    subtitle looks like a partial track, gets at most MEDIUM confidence and a note.
+    A 'Movie N' / 'Film N' / 'Gekijouban' video only pairs with a subtitle that
+    is marked the same way (or named exactly like it), and the other way round.
     """
     superseded = _superseded_originals(subtitles)
     usable = [sub for sub in subtitles if sub.filepath not in superseded]
@@ -507,27 +635,46 @@ def match_files(videos: list[EpisodeInfo], subtitles: list[EpisodeInfo],
         for sub, tag in by_key.get(key, []):
             if vid.season is not None and sub.season is not None and vid.season != sub.season:
                 continue
+            if (key[0] == "episode" and _is_film_marked(vid) != _is_film_marked(sub)
+                    and _comparable_stem(vid) != _comparable_stem(sub)):
+                continue    # 'Conan Movie 26' is not episode 26, nor the other way round
             score = title_similarity(vid, sub)
             rank = _language_rank(tag, subtitle_language)
-            order = (plain, rank > 0, _score_tier(score), rank, score, sub.version,
-                     is_synced_copy(sub.filepath))
-            pairs.append((order, index, sub, tag, score))
-    # Stable: between equal pairs the file order (by name) decides
+            # A missing season is a wildcard, but only as a last resort
+            season_fit = (vid.season or 1) == (sub.season or 1)
+            partial = _partial_words(vid, sub)
+            order = (plain, season_fit, score >= 50, rank > 0, not partial, _score_tier(score),
+                     rank, score, _name_fit(vid, sub), sub.version, is_synced_copy(sub.filepath))
+            pairs.append((order, index, sub, tag, score, season_fit, partial))
+    # Deterministic: between equal pairs the names decide, never the input order
+    # (list.sort is stable, also with reverse=True)
+    pairs.sort(key=lambda pair: (pair[2].filename.lower(), pair[2].filename,
+                                 videos[pair[1]].filename.lower(), videos[pair[1]].filename))
     pairs.sort(key=lambda pair: pair[0], reverse=True)
 
     by_index: dict[int, EpisodeMatch] = {}
     used: set[int] = set()
-    for _, index, sub, tag, score in pairs:
+    for _, index, sub, tag, score, season_fit, partial in pairs:
         if index in by_index or id(sub) in used:
             continue
         vid = videos[index]
+        confidence = _confidence(vid, sub, score)
+        notes = []
+        if not season_fit:
+            confidence = _at_most(confidence, MatchConfidence.MEDIUM)
+            notes.append(_season_note(vid, sub))
+        if partial:
+            confidence = _at_most(confidence, MatchConfidence.MEDIUM)
+            notes.append("the subtitle's name says it may be a partial or alternative track "
+                         f"({', '.join(partial)}); make sure it is the full dialogue")
         by_index[index] = EpisodeMatch(
             video=vid,
             subtitle=sub,
-            confidence=_confidence(vid, sub, score),
+            confidence=confidence,
             score=score,
             subtitle_language=tag,
             language_warning=language_warning(tag, subtitle_language),
+            note="; ".join(notes),
         )
         used.add(id(sub))
 
@@ -558,13 +705,15 @@ def set_manual_subtitle(matches: list[EpisodeMatch], index: int, subtitle: Optio
     """Give episode `index` the subtitle the user picked (None = no subtitle).
 
     A subtitle goes to one episode only: when another episode had it, that
-    episode is left without a subtitle and its index is returned."""
+    episode is left without a subtitle (a normal unmatched row that remembers
+    where its subtitle went, not a choice made by hand) and its index is returned."""
     moved_from = None
     if subtitle is not None:
         for i, other in enumerate(matches):
             if i != index and other.subtitle is not None and other.subtitle.filepath == subtitle.filepath:
                 matches[i] = EpisodeMatch(video=other.video, subtitle=None,
-                                          confidence=MatchConfidence.MANUAL, score=0.0)
+                                          confidence=MatchConfidence.NO_MATCH, score=0.0,
+                                          moved_to=matches[index].video.label)
                 moved_from = i
     video = matches[index].video
     if subtitle is None:

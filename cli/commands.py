@@ -54,6 +54,24 @@ def version():
     safe_echo(f"{APP_NAME} v{APP_VERSION}")
 
 
+def _match_warnings(match) -> list[str]:
+    """Why a pair needs a look: another language in the name, a season only
+    assumed, a partial track."""
+    return [text for text in (match.language_warning, match.note) if text]
+
+
+def _echo_pairs_to_check(matches) -> None:
+    """List the pairs that need a look (used before `preview` and `process`)."""
+    flagged = [(m, _match_warnings(m)) for m in matches if m.subtitle and _match_warnings(m)]
+    if not flagged:
+        return
+    safe_echo(click.style(f"\n[!] {len(flagged)} pair(s) to check:", fg='yellow'))
+    for match, warnings in flagged:
+        safe_echo(f"  Episode {match.video.label}: {match.video.filename}  <-  {match.subtitle.filename}")
+        for text in warnings:
+            safe_echo(click.style(f"         [!] Check: {text}", fg='yellow'))
+
+
 @cli.command()
 @click.argument('folder', type=click.Path(exists=True, file_okay=False, dir_okay=True))
 def scan(folder):
@@ -87,8 +105,8 @@ def scan(folder):
             else:
                 score, score_color = "-", 'red'
             safe_echo(f"  {ep:<6} {vid:<40} {sub:<40} {click.style(score, fg=score_color)}")
-            if match.language_warning:
-                safe_echo(click.style(f"         [!] Check: {match.language_warning}", fg='yellow'))
+            for text in _match_warnings(match) if match.subtitle else ():
+                safe_echo(click.style(f"         [!] Check: {text}", fg='yellow'))
 
         if result.unmatched_videos:
             safe_echo(f"\n  {click.style(f'[!] {len(result.unmatched_videos)} unmatched video(s)', fg='yellow')}")
@@ -235,6 +253,7 @@ def preview(folder, output, offset, sub_charset, keep_audio, keep_subs, keep_ori
         opts = _build_options(config, output, offset, sub_charset, keep_original_subs,
                               overwrite, include_unmatched, keep_audio, keep_subs)
         preview_data = engine.generate_preview(scan_result, opts)
+        _echo_pairs_to_check(scan_result.matches)
 
         safe_echo(click.style(f"\n[OK] Preview -- {len(preview_data.episodes)} episodes:", fg='green'))
         safe_echo("")
@@ -293,6 +312,7 @@ def process(folder, workers, dry_run, yes, output, offset, sub_charset, keep_aud
         safe_echo(f"[OK] Found {click.style(str(match_count), fg='green')} episode(s), "
                   f"{matched} with a matching subtitle.")
         safe_echo(f"  Output folder: {engine.output_dir(scan_result, opts)}")
+        _echo_pairs_to_check(scan_result.matches)
 
         if dry_run:
             safe_echo(click.style("  [DRY RUN MODE -- no changes will be made]", fg='yellow'))

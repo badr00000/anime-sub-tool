@@ -18,7 +18,8 @@ _UNCERTAIN = (MatchConfidence.MEDIUM, MatchConfidence.LOW)
 SUBTITLE_COLUMN = 2
 NONE_LABEL = "— none —"
 PICK_HINT = ("Double-click, F2 or Enter to pick another subtitle for this episode "
-             "(or none). Choices made by hand are reset when the folder is rescanned.")
+             "(or none). Choices made by hand are reset when the folder is rescanned with "
+             "SCAN FOLDER; an automatic Watch-folder rescan keeps them.")
 
 
 def _same_file(a: Optional[EpisodeInfo], b: Optional[EpisodeInfo]) -> bool:
@@ -181,7 +182,8 @@ class PreviewPanel(QWidget):
         moved_from = ProcessingEngine.set_manual_subtitle(scan, row, subtitle, self.subtitle_language)
         self._manual[scan.matches[row].video.filepath] = subtitle.filepath if subtitle else None
         if moved_from is not None:
-            self._manual[scan.matches[moved_from].video.filepath] = None
+            # Not a choice of its own: re-applying the pick above empties it again
+            self._manual.pop(scan.matches[moved_from].video.filepath, None)
         return moved_from
 
     def set_subtitle_language(self, language: str):
@@ -200,16 +202,32 @@ class PreviewPanel(QWidget):
 
     # ─── table ───
 
-    def populate(self, scan_result, subtitle_language: Optional[str] = None):
-        """Show a ScanResult. A new scan clears the choices made by hand."""
+    def populate(self, scan_result, subtitle_language: Optional[str] = None,
+                 keep_manual: bool = False) -> tuple[int, int]:
+        """Show a ScanResult. A new scan clears the choices made by hand, unless
+        keep_manual (an automatic Watch-folder rescan): then every choice whose
+        episode and subtitle files are still in the new scan is applied again.
+        Returns (choices kept, choices dropped)."""
         if not scan_result:
-            return
+            return 0, 0
+        manual = {}
         if scan_result is not self.scan_result:
-            self._manual = {}
+            manual, self._manual = (self._manual if keep_manual else {}), {}
         self.scan_result = scan_result
         if subtitle_language is not None:
             self.subtitle_language = subtitle_language
+        kept = dropped = 0
+        if manual:
+            rows = {m.video.filepath: i for i, m in enumerate(scan_result.matches)}
+            subs = {s.filepath: s for s in scan_result.subtitle_files}
+            for video_path, sub_path in manual.items():
+                if video_path in rows and (sub_path is None or sub_path in subs):
+                    self._apply(rows[video_path], subs[sub_path] if sub_path else None)
+                    kept += 1
+                else:
+                    dropped += 1
         self.refresh()
+        return kept, dropped
 
     def _item(self, row: int, column: int) -> QTableWidgetItem:
         item = self.table.item(row, column)
@@ -264,8 +282,12 @@ class PreviewPanel(QWidget):
             # Subtitle filename (the tooltip also tells the detected encoding and language)
             if match.subtitle:
                 sub_name = match.subtitle.filename
+            elif match.is_manual:
+                sub_name = "— none (chosen by hand) —"
+            elif match.moved_to:
+                sub_name = f"— none (moved to EP {match.moved_to}) —"
             else:
-                sub_name = "— none (chosen by hand) —" if match.is_manual else "— No match —"
+                sub_name = "— No match —"
             sub_item = self._item(i, SUBTITLE_COLUMN)
             sub_item.setFlags(read_only | Qt.ItemFlag.ItemIsEditable)
             sub_text = sub_name
@@ -314,6 +336,10 @@ class PreviewPanel(QWidget):
                 if match.is_manual:
                     status_tip = ("You chose no subtitle for this episode. It is skipped unless "
                                   "'Also process episodes that have no subtitle' is ticked.")
+                elif match.moved_to:
+                    status_tip = (f"Its subtitle was moved to episode {match.moved_to}. The episode "
+                                  "is skipped unless 'Also process episodes that have no "
+                                  "subtitle' is ticked.")
                 else:
                     status_tip = ("No subtitle with this episode number. The episode is skipped "
                                   "unless 'Also process episodes that have no subtitle' is ticked.")
@@ -328,9 +354,12 @@ class PreviewPanel(QWidget):
             elif match.confidence in _UNCERTAIN:
                 status_text = "⚠ CHECK"
                 status_color = Colors.amber if match.confidence == MatchConfidence.MEDIUM else Colors.red
-                status_tip = ("Matched by episode number, but the two file names carry different "
-                              "titles. Normal when the subtitle uses another spelling or a "
-                              "translated title; make sure it is the same show.")
+                if match.note:
+                    status_tip = f"Check: {match.note}."
+                else:
+                    status_tip = ("Matched by episode number, but the two file names carry "
+                                  "different titles. Normal when the subtitle uses another "
+                                  "spelling or a translated title; make sure it is the same show.")
             else:
                 status_text, status_color = "READY", Colors.blue_bright
                 status_tip = "Episode number and title agree."

@@ -455,11 +455,20 @@ class AnimeSubToolApp(QMainWindow):
             return
 
         matched_for = getattr(self.sender(), "subtitle_language", None)
-        self.preview_panel.populate(
-            result, matched_for if matched_for is not None else self.config.subtitle_language)
+        # An automatic (Watch folder) rescan keeps the subtitles picked by hand;
+        # the SCAN FOLDER button starts afresh.
+        kept, dropped = self.preview_panel.populate(
+            result, matched_for if matched_for is not None else self.config.subtitle_language,
+            keep_manual=auto)
         # The language may have been changed while the scan ran
         self.preview_panel.set_subtitle_language(self._subtitle_language())
         self._go_to_step(1)
+        if kept or dropped:
+            message = (f"Folder changed and was rescanned — kept {kept} subtitle "
+                       "choice(s) made by hand")
+            if dropped:
+                message += f", dropped {dropped} whose file(s) are gone"
+            self.status_bar.showMessage(message)
 
     def _on_scan_error(self, err):
         self.status_bar.showMessage("Scan failed")

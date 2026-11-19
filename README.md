@@ -15,7 +15,12 @@ It also includes a small standalone tool to fix subtitle timing (Sync Subtitle).
   (plus fallback patterns), so `[Cleo]Mousou_Dairinin_-_01` is paired with
   `[Scarlet Team] Paranoia Agent - 01`. What the matcher does and does not do:
   - the episode number decides the pairing; when both names state a season
-    (`S02E05`, `2nd Season`) the seasons must agree too;
+    (`S02E05`, `2nd Season`, `S2 - 05`) the seasons must agree too. A name
+    without a season counts as season 1 when choosing between candidates, so
+    `Oshi no Ko - 01.mkv` takes `Oshi no Ko - 01.ar.srt` and `Oshi no Ko 2nd
+    Season - 01.mkv` takes `Oshi no Ko S2 - 01.ar.srt`. If the only candidate is
+    from another season as far as the names tell (`Show - 02.mkv` with just
+    `Show S2 - 02.srt`), it is still paired but flagged `⚠ CHECK`;
   - the title similarity (via `rapidfuzz`) is shown as a percentage. Different
     titles do **not** block a match — groups use different spellings and
     translated titles — but such rows are flagged `⚠ CHECK` in the preview so
@@ -25,22 +30,40 @@ It also includes a small standalone tool to fix subtitle timing (Sync Subtitle).
     `OVA` / `Special` files are only paired with a subtitle that is also marked
     `OVA` / `Special`;
   - a multi-episode file such as `01-02` is matched by its first number;
-  - if `Show - 01.srt` and `Show - 01.synced.srt` both exist, the synced copy is used;
-  - when several files compete for the same subtitle, the best-matching pair wins
-    whatever the file order: `5 Centimeters per Second (2007).mkv` (read as
-    episode 5) does not take `Show - 05.srt` away from `Show - 05.mkv`;
+  - a `Movie N` / `Film N` / `Gekijouban` file is a film, not episode N:
+    `Detective Conan Movie 26.mkv` only pairs with a subtitle that is also marked
+    as a film (`Detective Conan Movie 26.ar.srt`), never with `Detective Conan - 26.srt`;
+  - if `Show - 01.srt` and `Show - 01.synced.srt` both exist, the synced copy is
+    used; `Show - 01v2.srt` is preferred over `Show - 01.srt`;
+  - the full subtitle beats partial or alternative tracks: `Show - 03.srt` wins
+    over `Show - 03 [Signs].ass`, `(Signs & Songs)`, `.forced.srt`, `(CC)`, `SDH`,
+    `karaoke`, `commentary`, `alt`, `old`, `- Copy`, `Preview`. Such a track is
+    only paired when it is the only candidate, and then flagged `⚠ CHECK`;
+    between otherwise equal subtitles the one named exactly like the episode wins;
+  - when several files compete for the same subtitle, every possible pair is
+    ranked and the best pairs are taken first, so the result does not depend on
+    the file order (equal pairs are decided by file name):
+    `5 Centimeters per Second (2007).mkv` (read as episode 5) does not take
+    `Show - 05.srt` away from `Show - 05.mkv`. A subtitle whose title is
+    unrelated (title match under 50%) never beats a well-titled one;
   - **films and other files without an episode number** pair on their name, with
     bracket tags, release tags (`1080p`, `BluRay`, `x265`, …), years, a trailing
     scene group (`-GROUP`) and the subtitle's language code ignored:
     `Suzume.2022.1080p.BluRay.x265-GROUP.mkv` pairs with `Suzume.ar.srt` or
-    `Suzume.2022.ar.srt`. A title that is only a year (`1917`) is kept. Language
-    codes are only removed from subtitle names (`Tenki.no.Ko.mkv` keeps its `Ko`);
+    `Suzume.2022.ar.srt`. A title that is only a year (`1917`) is kept. A year
+    at the end of a name (`Perfect Blue 1997.mkv`, `Your Name 2016.mkv`) is a
+    year, not episode 1997; a year-like number right after ` - `, `E`, `Ep`,
+    `Episode` or `#` is still an episode number (`One Piece - 1071`,
+    `Show - 2023`). Language codes are only removed from subtitle names
+    (`Tenki.no.Ko.mkv` keeps its `Ko`);
   - **language tags**: a subtitle name may say its language — a suffix such as
     `.ar`, `.ara`, `.en`, `.eng`, `.ja` (any code, alias or name the language
     dropdowns know) or a bracket such as `(English)`, `[ENG]`, `(عربي)`, `[Arabic]`.
     A subtitle in the language you chose for the new track (Subtitle *Language*
     option, default from Settings) wins, then one without a tag; one tagged with
-    another language never beats those. If it is the only candidate it is still
+    another language never beats those, unless their title is unrelated (under
+    50%: `Frieren - 01.mkv` takes `Frieren - 01.en.srt`, flagged, rather than
+    `Oshi no Ko - 01.srt`). If it is the only candidate it is still
     paired, but the row is flagged `⚠ CHECK` ("subtitle looks like English, track
     will be labelled Arabic"). The detected tag is shown in the subtitle's tooltip.
 - **Track cleanup** — keep only the audio languages you choose, remove (or
@@ -57,7 +80,8 @@ It also includes a small standalone tool to fix subtitle timing (Sync Subtitle).
 - **Presets** — save the options panel under a name and load it later.
 - **Watch folder** — optional: while it is ticked on the first page, the folder
   is **rescanned automatically** when video or subtitle files are added or
-  changed. It only refreshes the scan; processing always starts with your click.
+  changed. It only refreshes the scan (subtitles you picked by hand are kept);
+  processing always starts with your click.
 - **Sync Subtitle** — play an episode with a `.srt` / `.ass` / `.ssa` subtitle
   drawn on top, nudge the subtitle earlier or later while watching (`G` / `H`,
   like VLC), then save a shifted copy as `name.synced.srt`. A warning appears
@@ -78,9 +102,12 @@ It also includes a small standalone tool to fix subtitle timing (Sync Subtitle).
    row and press Enter, Space or F2) and pick any subtitle of the folder, or
    `— none —`. The row then shows `MANUAL`, and the counters update. A subtitle
    can belong to one episode only: picking one that another episode had moves it
-   (that episode is left without a subtitle). Processing uses the pairs as shown.
-   Choices made by hand are kept when you change the subtitle language, but a
-   rescan of the folder (including an automatic one from *Watch folder*) resets them.
+   (that episode is left without a subtitle and shows `— none (moved to EP n) —`).
+   Processing uses the pairs as shown.
+   Choices made by hand are kept when you change the subtitle language and when
+   *Watch folder* rescans the folder automatically (choices whose files are gone
+   are dropped; the status bar says how many were kept and dropped). **SCAN
+   FOLDER** starts afresh and resets them.
 3. Click **START PROCESSING**. Up to 8 episodes are processed at once
    (default 4; change it with *Episodes at once*). **CANCEL** lets running
    episodes finish and skips the rest.
@@ -131,6 +158,10 @@ py -3.11 main.py process "D:\Anime\Show" --yes        # merge the season
 py -3.11 main.py shift "Show - 01.srt" --offset 1.5   # write Show - 01.synced.srt
 py -3.11 main.py --help
 ```
+
+`scan`, `preview` and `process` all print the pairs to check (`[!] Check: ...`:
+another language in the subtitle name, a season only assumed, a partial track);
+`process` prints them before the confirmation prompt and before anything runs.
 
 `process` options: `--workers N` (1-8), `--output DIR`, `--dry-run`, `--yes`,
 `--offset SECONDS`, `--sub-charset NAME`, `--keep-audio LANGS`, `--keep-subs LANGS`,
