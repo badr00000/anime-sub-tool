@@ -9,6 +9,7 @@ except ImportError:
     HAS_ANITOPY = False
 
 from rapidfuzz import fuzz
+from core.languages import NAMES as _LANGUAGE_NAMES, normalize as _normalize_language
 from core.models import EpisodeInfo, EpisodeMatch, MatchConfidence
 from core.constants import EPISODE_PATTERNS, OUTPUT_MARKER, SUBTITLE_EXTENSIONS, VIDEO_EXTENSIONS
 from utils.logger import get_logger
@@ -47,13 +48,21 @@ _EXTRA_KEYWORD = (
 _KEYWORD = re.compile(_EXTRA_KEYWORD)
 # Separate runs are numbered 'Show OVA - 01'; for the others ('Happy Ending - 01',
 # 'Opening Night - 01') only a number glued to the word counts ('OP1', 'OP 01').
-_SEPARATE_RUN_NUMBER = re.compile(r'[ ._]*-?[ ._]*\d')
-_ATTACHED_NUMBER = re.compile(r'[ ._-]?\d')
+# Marker numbers have 1-3 digits: 'ED921796' is a CRC, not ending 921796.
+_SEPARATE_RUN_NUMBER = re.compile(r'[ ._]*-?[ ._]*\d{1,3}(?!\d)')
+_ATTACHED_NUMBER = re.compile(r'[ ._-]?\d{1,3}(?!\d)')
 _AFTER_EPISODE_DASH = re.compile(r'\s-\s*$')
+# A marker right after the episode number: 'Show - 01 OP', 'Show - 01 - Preview',
+# 'Show_05_ED', 'Show S01E05 OP'. It must end the name ('Show 2 Opening Night - 01'
+# is a title).
+_AFTER_EPISODE_NUMBER = re.compile(r'(?:^|[\s._-]|(?<=\d)[Ee])\d{1,4}(?:v\d)?[ ._]*(?:-[ ._]*)?$')
+_NOTHING_AFTER = re.compile(r'[\s._-]*(?:\d{1,3})?[\s._-]*')
 # A bracket holding nothing but a marker: '[OP]', '(NCED 2)', '[Creditless OP]'
 _BRACKET = re.compile(r'[\[(]([^\[\]()]*)[\])]')
-_MARKER_ONLY = re.compile(r'^\s*(?:' + _EXTRA_KEYWORD + r')(?:[ ._-]?\d+)?'
+_MARKER_ONLY = re.compile(r'^\s*(?:' + _EXTRA_KEYWORD + r')(?:[ ._-]?\d{1,3})?'
                           r'(?:\s+(?:' + _EXTRA_KEYWORD + r'))?\s*$')
+_CRC = re.compile(r'\s*[0-9A-Fa-f]{8}\s*')
+_VERSION = re.compile(r'(?<=\d)v(\d{1,2})(?![A-Za-z0-9])', re.IGNORECASE)
 
 _SEASON_PATTERNS = (
     re.compile(r'(?<![A-Za-z0-9])S(\d{1,2})E\d{1,4}', re.IGNORECASE),
@@ -107,6 +116,8 @@ def _extra_kind(stem: str) -> str:
     for bracket in _BRACKET.finditer(stem):
         if bracket.start() == leading:
             continue        # '[Group]' / '[Specials]' release tag
+        if _CRC.fullmatch(bracket.group(1)):
+            continue        # '[ED921796]' is a CRC32 checksum
         if _MARKER_ONLY.match(bracket.group(1)):
             words = _KEYWORD.findall(bracket.group(1))
             return _kind_name(" ".join(words) if len(words) > 1 else words[0])
@@ -118,7 +129,19 @@ def _extra_kind(stem: str) -> str:
         number = _SEPARATE_RUN_NUMBER if kind in ("OVA", "SPECIAL") else _ATTACHED_NUMBER
         if number.match(after) or _AFTER_EPISODE_DASH.search(before):
             return kind
+        if _AFTER_EPISODE_NUMBER.search(before) and _NOTHING_AFTER.fullmatch(after):
+            return kind
     return ""
+
+
+def _has_marker_word(stem: str) -> bool:
+    """True when a marker word appears anywhere outside the leading group tag,
+    even where _extra_kind() does not count it as an extra."""
+    rest = stem.lstrip()
+    first = _BRACKET.match(rest)
+    if first:
+        rest = rest[first.end():]
+    return bool(_KEYWORD.search(rest))
 
 
 def _parse_season(filename: str, anime_season) -> Optional[int]:
@@ -159,6 +182,8 @@ def extract_episode_info(filepath: Path) -> EpisodeInfo:
 
     season = _parse_season(parse_name, season)
     extra_kind = _extra_kind(parse_stem)
+    version_match = _VERSION.search(re.sub(r'\[.*?\]|\(.*?\)', ' ', parse_stem))
+    version = int(version_match.group(1)) if version_match else 1
 
     # Fallback to regex patterns if anitopy failed or is not installed
     if not episode_num:
@@ -194,6 +219,7 @@ def extract_episode_info(filepath: Path) -> EpisodeInfo:
         series_title=series_title,
         season=season,
         extra_kind=extra_kind,
+        version=version,
     )
 
 
@@ -281,12 +307,52 @@ def _confidence(video: EpisodeInfo, subtitle: EpisodeInfo, score: float) -> Matc
     return MatchConfidence.LOW
 
 
-def _match_key(info: EpisodeInfo) -> Optional[tuple[str, str]]:
-    """Files pair up only when this key is equal (same kind of extra, '' for an
-    episode, and same number); None = never paired."""
-    if not info.episode_num:
+# Release tags that say nothing about which film or episode a file is
+_RELEASE_TAGS = re.compile(
+    r'(?<![a-z0-9])(?:\d{3,4}[pi]|\d{3,4}x\d{3,4}|[xh] ?26[45]|hevc|avc|av1|xvid|divx'
+    r'|10 ?bits?|8 ?bits?|hdr|sdr|bd|bdrip|bdremux|bluray|blu ray|remux|dvd|dvdrip|web|web ?dl'
+    r'|webrip|hdtv|flac|aac|ac3|eac3|dts|opus|mp3|dual ?audio|multi ?subs?|uncensored'
+    r'|uncut|repack|proper)(?![a-z0-9])')
+
+
+def _strip_language_suffix(stem: str) -> str:
+    """'Suzume.ar' -> 'Suzume': a trailing '.xx' / '.xxx' language code (how
+    players name external subtitles) is not part of the title."""
+    head, dot, tail = stem.rpartition(".")
+    if dot and head and 2 <= len(tail) <= 3 and tail.isalpha():
+        code = _normalize_language(tail)
+        if code in _LANGUAGE_NAMES and code != "und":
+            return head
+    return stem
+
+
+def numberless_title(info: EpisodeInfo) -> str:
+    """The name of a file without an episode number, reduced to what identifies
+    it: no bracket/paren tags, release tags, trailing language code or case."""
+    stem = info.filepath.stem
+    if is_synced_copy(info.filepath):
+        stem = stem[:-len(_SYNCED_SUFFIX)]
+    stem = _strip_language_suffix(stem)
+    stem = re.sub(r'\[.*?\]|\(.*?\)', ' ', stem).lower()
+    stem = re.sub(r'[\W_]+', ' ', stem)
+    stem = _RELEASE_TAGS.sub(' ', stem)
+    return " ".join(stem.split())
+
+
+def _match_key(info: EpisodeInfo) -> Optional[tuple]:
+    """Files pair up only when this key is equal; None = never paired.
+
+    With an episode number: same kind of extra ('' for an episode) and number.
+    Without one (a film, 'Show - ED', 'Show OVA'): same kind and the same title.
+    The two kinds of key never compare equal, so a numbered episode never pairs
+    with a numberless subtitle or the other way round.
+    """
+    if info.episode_num:
+        return ("episode", info.extra_kind, info.episode_num)
+    title = numberless_title(info)
+    if not title:
         return None
-    return (info.extra_kind, info.episode_num)
+    return ("named", info.extra_kind, title)
 
 
 def _superseded_originals(subtitles: Iterable[EpisodeInfo]) -> set[Path]:
@@ -315,7 +381,7 @@ def match_files(videos: list[EpisodeInfo], subtitles: list[EpisodeInfo]) -> tupl
     unmatched_videos = []
 
     superseded = _superseded_originals(subtitles)
-    sub_map: dict[tuple[str, str], list[EpisodeInfo]] = {}
+    sub_map: dict[tuple, list[EpisodeInfo]] = {}
     unmatched_subtitles = []
     for sub in subtitles:
         if sub.filepath in superseded:
@@ -326,7 +392,13 @@ def match_files(videos: list[EpisodeInfo], subtitles: list[EpisodeInfo]) -> tupl
         else:
             sub_map.setdefault(key, []).append(sub)
 
-    for vid in videos:
+    # Plain episodes choose first: a video whose name carries a marker word that
+    # was not recognised as an extra can never take the subtitle away from the
+    # plain 'Show - 01.mkv'. The matches keep the order of `videos`.
+    order = sorted(range(len(videos)), key=lambda i: _has_marker_word(videos[i].filepath.stem))
+    by_index: dict[int, EpisodeMatch] = {}
+    for index in order:
+        vid = videos[index]
         key = _match_key(vid)
         candidates = [
             sub for sub in sub_map.get(key, [])
@@ -335,27 +407,33 @@ def match_files(videos: list[EpisodeInfo], subtitles: list[EpisodeInfo]) -> tupl
         if not candidates:
             # Still listed in matches so the UI shows the episode, and reported
             # as unmatched so it can warn about it.
-            matches.append(EpisodeMatch(
+            by_index[index] = EpisodeMatch(
                 video=vid,
                 subtitle=None,
                 confidence=MatchConfidence.NO_MATCH,
                 score=0.0
-            ))
-            unmatched_videos.append(vid)
+            )
             continue
 
-        # Closest title first; between equals a synced copy wins
-        scored = [(title_similarity(vid, sub), is_synced_copy(sub.filepath), sub) for sub in candidates]
-        score, _, best_sub = max(scored, key=lambda item: (item[0], item[1]))
+        # Closest title first; between equals the higher release version
+        # ('01v2' over '01'), then a synced copy
+        scored = [(title_similarity(vid, sub), sub.version, is_synced_copy(sub.filepath), sub)
+                  for sub in candidates]
+        score, _, _, best_sub = max(scored, key=lambda item: item[:3])
 
-        matches.append(EpisodeMatch(
+        by_index[index] = EpisodeMatch(
             video=vid,
             subtitle=best_sub,
             confidence=_confidence(vid, best_sub, score),
             score=score
-        ))
+        )
         # Remove matched sub from map to prevent double matching
         sub_map[key].remove(best_sub)
+
+    for index, vid in enumerate(videos):
+        matches.append(by_index[index])
+        if by_index[index].subtitle is None:
+            unmatched_videos.append(vid)
 
     # Collect remaining unmatched subtitles
     for sub_list in sub_map.values():

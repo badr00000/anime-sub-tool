@@ -428,3 +428,57 @@ def test_unknown_charset_fails_the_episode_instead_of_reaching_mkvmerge(season):
     result, fake = run_one(season, ProcessingOptions(subtitle_charset="klingon-8"))
     assert result.status == S.FAILED and "klingon-8" in result.message
     assert fake.calls == []
+
+
+# ── R3B-01: the new default subtitle is the only default one ──────────────────
+
+@pytest.mark.parametrize("changes, cleared", [
+    (dict(), []),                                                     # all originals removed
+    (dict(remove_existing_subs=False), [3, 4, 5]),                    # every kept original
+    (dict(keep_sub_langs=["eng"]), [3]),
+    (dict(edit_target_lang="und"), [4]),                              # the edited track too
+    (dict(remove_existing_subs=False, set_default=False), []),        # new one not default
+    (dict(keep_sub_langs=["eng"], set_default=False), []),
+])
+def test_kept_original_subtitles_lose_the_default_flag(season, changes, cleared):
+    result, fake = run_one(season, ProcessingOptions(**changes))
+    assert result.status == S.COMPLETED
+    assert sorted(fake.calls[0]["clear_default_track_ids"]) == cleared
+
+
+def test_no_default_flags_touched_without_a_new_subtitle(season):
+    (season / "Show - 01.srt").unlink()
+    result, fake = run_one(season, ProcessingOptions(process_unmatched=True,
+                                                     remove_existing_subs=False))
+    assert result.status == S.COMPLETED
+    assert fake.calls[0]["clear_default_track_ids"] == []
+
+
+def test_merge_command_clears_default_flags(tmp_path, monkeypatch):
+    """The wrapper turns the ids into mkvmerge's --default-track-flag options,
+    placed before the episode so they apply to its tracks."""
+    from core import mkvtools
+    seen = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, cmd, **kwargs):
+            seen["cmd"] = cmd
+            Path(cmd[cmd.index("-o") + 1]).write_bytes(b"x")
+            import io
+            self.stdout = io.StringIO("")
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(mkvtools.subprocess, "Popen", FakeProcess)
+    (tmp_path / "a.mkv").write_bytes(b"v")
+    (tmp_path / "a.srt").write_bytes(b"s")
+    tools = mkvtools.MKVToolsWrapper("")
+    tools.merge(str(tmp_path / "a.mkv"), str(tmp_path / "b.mkv"), subtitle_path=str(tmp_path / "a.srt"),
+                clear_default_track_ids=[2, 3])
+    cmd = seen["cmd"]
+    video = cmd.index(str((tmp_path / "a.mkv").resolve()))
+    assert cmd[video - 4:video] == ["--default-track-flag", "2:no", "--default-track-flag", "3:no"]
+    assert cmd[cmd.index("--default-track-flag", video) + 1] == "0:yes"

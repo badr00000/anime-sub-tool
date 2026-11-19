@@ -218,3 +218,132 @@ def test_scan_ignores_partial_and_marked_files_of_any_kind(tmp_path):
     videos, subs = list_media_files(tmp_path)
     assert [v.name for v in videos] == ["Show - 01.mkv"]
     assert [s.name for s in subs] == ["Show - 01.srt"]
+
+
+# ── R3A-04: a marker after the episode number never steals the episode subtitle ─
+
+@pytest.mark.parametrize("extra, kind", [
+    ("Show - 01 Preview.mkv", "PREVIEW"), ("Show - 01 OP.mkv", "OP"), ("Show - 01 NCOP.mkv", "NCOP"),
+    ("Show - 05 ED.mkv", "ED"), ("Show - 01 OVA.mkv", "OVA"), ("Show - 01 Special.mkv", "SPECIAL"),
+    ("Show - 01 - Preview.mkv", "PREVIEW"), ("Show_01_NCED.mkv", "NCED"), ("Show S01E01 OP.mkv", "OP"),
+])
+def test_marker_after_the_number_is_an_extra(extra, kind):
+    assert info(extra).extra_kind == kind
+    episode = "Show - 05.mkv" if "05" in extra else "Show - 01.mkv"
+    sub = episode.replace(".mkv", ".srt")
+    # The extra sorts first by name: it must still not take the subtitle
+    matches, unmatched_v, unmatched_s = match(sorted([extra, episode]), [sub])
+    by_video = {m.video.filename: m for m in matches}
+    assert by_video[episode].subtitle.filename == sub
+    assert by_video[extra].subtitle is None
+    assert [v.filename for v in unmatched_v] == [extra] and not unmatched_s
+    assert [m.video.filename for m in matches] == sorted([extra, episode])     # order kept
+
+
+def test_marker_word_ending_a_title_is_still_a_title():
+    assert info("Show 2 Opening Night - 01.mkv").extra_kind == ""
+
+
+def test_plain_video_wins_over_an_unrecognised_marker_video():
+    """Backstop: 'Show - 01 [Preview v2].mkv' is not recognised as an extra, but the
+    plain episode still gets the plain subtitle."""
+    odd = "Show - 01 [Preview v2].mkv"
+    assert info(odd).extra_kind == "" and info(odd).episode_num == "1"
+    matches, _, _ = match([odd, "Show - 01.mkv"], ["Show - 01.srt"])
+    by_video = {m.video.filename: m.subtitle for m in matches}
+    assert by_video["Show - 01.mkv"].filename == "Show - 01.srt"
+    assert by_video[odd] is None
+
+
+# ── R3A-05: files without an episode number pair on their name ────────────────
+
+@pytest.mark.parametrize("video, sub", [
+    ("Your Name (2016) [1080p].mkv", "Your Name (2016) [1080p].srt"),
+    ("Your Name (2016) [1080p].mkv", "Your Name.srt"),
+    ("Suzume.mkv", "Suzume.ar.srt"),
+    ("Suzume.mkv", "suzume.eng.ass"),
+    ("[Group] Suzume [BD 1080p x265 FLAC].mkv", "Suzume.ara.srt"),
+    ("Show The Movie.mkv", "Show The Movie.srt"),
+    ("Show - ED.mkv", "Show - ED.srt"),
+    ("Show OVA.mkv", "Show OVA.srt"),
+])
+def test_numberless_files_pair_on_their_name(video, sub):
+    matches, unmatched_v, unmatched_s = match([video], [sub])
+    assert matches[0].subtitle is not None and matches[0].subtitle.filename == sub
+    assert not unmatched_v and not unmatched_s
+
+
+def test_numberless_files_with_other_names_do_not_pair():
+    matches, _, unmatched_s = match(["Suzume.mkv"], ["Weathering With You.srt"])
+    assert matches[0].subtitle is None and len(unmatched_s) == 1
+    # kind must agree too
+    matches, _, _ = match(["Show - ED.mkv"], ["Show - OP.srt"])
+    assert matches[0].subtitle is None
+
+
+def test_numbered_episode_never_takes_a_numberless_subtitle():
+    matches, _, unmatched_s = match(["Show - 01.mkv"], ["Show.srt"])
+    assert matches[0].subtitle is None and [s.filename for s in unmatched_s] == ["Show.srt"]
+    matches, _, unmatched_s = match(["Show.mkv"], ["Show - 01.srt"])
+    assert matches[0].subtitle is None and [s.filename for s in unmatched_s] == ["Show - 01.srt"]
+
+
+def test_movie_folder_merges_end_to_end(tmp_path):
+    """A single film plus its subtitle goes all the way through the engine."""
+    from core.engine import ProcessingEngine
+    from core.models import AppConfig, FileInfo, ProcessingOptions, ProcessingResult, ProcessingStatus
+
+    (tmp_path / "Your Name (2016) [1080p].mkv").write_bytes(b"video")
+    (tmp_path / "Your Name (2016) [1080p].srt").write_bytes(
+        b"1\r\n00:00:01,000 --> 00:00:02,000\r\nHello\r\n")
+    merged = []
+
+    class Tools:
+        def identify(self, path, cancel_event=None):
+            return FileInfo(filepath=Path(path))
+
+        def merge(self, **kwargs):
+            merged.append(kwargs)
+            Path(kwargs["output_path"]).write_bytes(b"out")
+            return ProcessingResult(status=ProcessingStatus.COMPLETED)
+
+        def terminate_all(self):
+            pass
+
+    engine = ProcessingEngine(AppConfig(), mkv_tools=Tools())
+    scan = engine.scan_and_match(tmp_path)
+    assert scan.matches[0].is_matched and not scan.unmatched_subtitles
+    result = engine.process_batch(scan, ProcessingOptions())
+    assert result.successful == 1
+    assert Path(merged[0]["subtitle_path"]).name == "Your Name (2016) [1080p].srt"
+    assert (tmp_path / "PROCESSED" / "Your Name (2016) [1080p].mkv").is_file()
+
+
+# ── R3A-07 / R3A-08 ───────────────────────────────────────────────────────────
+
+def test_crc_bracket_is_not_an_ending():
+    for name in ("[G] Show - 05 [ED921796].mkv", "[G] Show - 05 [OP123456].mkv",
+                 "[G] Show - 05 [ABCDEF12].mkv"):
+        assert info(name).extra_kind == "" and info(name).episode_num == "5"
+    matches, _, _ = match(["[G] Show - 05 [ED921796].mkv"], ["[G] Show - 05.srt"])
+    assert matches[0].subtitle.filename == "[G] Show - 05.srt"
+    assert info("[G] Show - 05 [ED 1234].mkv").extra_kind == ""   # 4 digits: not a marker number
+    assert info("[G] Show - 05 [ED 2].mkv").extra_kind == "ED"
+
+
+def test_higher_subtitle_version_wins():
+    assert info("Show - 01v2.srt").version == 2 and info("Show - 01.srt").version == 1
+    for subs in (["Show - 01.srt", "Show - 01v2.srt"], ["Show - 01v2.srt", "Show - 01.srt"]):
+        matches, _, unmatched_s = match(["Show - 01.mkv"], subs)
+        assert matches[0].subtitle.filename == "Show - 01v2.srt"
+        assert [s.filename for s in unmatched_s] == ["Show - 01.srt"]
+
+
+# ── R3B-06: extras are labelled by kind and number ────────────────────────────
+
+@pytest.mark.parametrize("name, label", [
+    ("Show - NCOP1.mkv", "NCOP 1"), ("Show - 05.mkv", "5"), ("Show - ED.mkv", "ED"),
+    ("Show - 01 Preview.mkv", "PREVIEW 1"), ("Suzume.mkv", "?"),
+])
+def test_episode_label(name, label):
+    assert info(name).label == label

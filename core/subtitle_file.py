@@ -195,6 +195,12 @@ def count_clamped(sub: SubtitleFile, offset_ms: int) -> int:
     return sum(1 for cue in sub.cues if cue.start_ms + offset_ms < 0)
 
 
+def all_cues_gone(sub: SubtitleFile, offset_ms: int) -> bool:
+    """True when the offset moves every line to end at or before 0:00: the shifted
+    file would show nothing at all."""
+    return bool(sub.cues) and offset_ms < 0 and all(c.end_ms + offset_ms <= 0 for c in sub.cues)
+
+
 def shifted_text(sub: SubtitleFile, offset_ms: int) -> str:
     """Return the file content with every timestamp moved by offset_ms (clamped at 0)."""
     if offset_ms == 0:

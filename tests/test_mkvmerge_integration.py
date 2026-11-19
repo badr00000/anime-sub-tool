@@ -311,3 +311,21 @@ def test_force_cancel_kills_a_real_mkvmerge_mid_write(tmp_path):
     # The next run is not fooled into 'already exists'
     rerun = EpisodeProcessor(MKVToolsWrapper(""), ProcessingOptions())
     assert rerun._precheck(match) is None
+
+
+# ── R3B-01: only the new subtitle is flagged default in the output ────────────
+
+@pytest.mark.parametrize("options, expected", [
+    (dict(remove_existing_subs=False), {"eng": False, "ara": True}),
+    (dict(remove_existing_subs=False, set_default=False), {"eng": True, "ara": False}),
+    (dict(edit_target_lang="eng", edit_new_lang="fre", edit_new_name="French"),
+     {"fre": False, "ara": True}),
+])
+def test_default_flag_moves_to_the_new_subtitle(tmp_path, engine, options, expected):
+    make_episode(tmp_path / "Show - 01.mkv")
+    assert tracks(tmp_path / "Show - 01.mkv", "subtitles")[0]["properties"]["default_track"] is True
+    write_srt(tmp_path / "Show - 01.srt", ARABIC_SRT, "cp1256")
+    result = engine.process_batch(engine.scan_and_match(tmp_path), ProcessingOptions(**options))
+    assert result.successful == 1, [r.message for r in result.results]
+    subs = tracks(tmp_path / "PROCESSED" / "Show - 01.mkv", "subtitles")
+    assert {s["properties"]["language"]: s["properties"]["default_track"] for s in subs} == expected

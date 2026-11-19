@@ -45,7 +45,19 @@ def window(qapp, dialogs):
     from gui.app import AnimeSubToolApp
     w = AnimeSubToolApp()
     yield w
-    w._process_worker = None
+    # A real worker still running is stopped and waited for: dropping the reference
+    # would hide it and let the QThread be destroyed while it runs. Stand-ins that
+    # tests put in place are simply removed.
+    from PySide6.QtCore import QThread
+    for name in ("_process_worker", "_scan_worker"):
+        worker = getattr(w, name, None)
+        if isinstance(worker, QThread):
+            if worker.isRunning():
+                if hasattr(worker, "cancel"):
+                    worker.cancel(force=True)
+                assert worker.wait(30_000), f"{name} did not stop"
+        elif worker is not None:
+            setattr(w, name, None)
     w.close()
     QApplication.processEvents()
 

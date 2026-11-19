@@ -116,7 +116,7 @@ def test_resolve_charset(tmp_path):
 
 def test_encoding_choices_cover_the_supported_set():
     values = [value for _, value in CHARSET_CHOICES]
-    assert values == ["auto", "utf-8", "cp1256", "cp1252", "cp1250", "cp1254", "cp1251",
+    assert values == ["auto", "utf-8", "cp1256", "cp1252", "cp1250", "cp1254", "cp1258", "cp1251",
                       "koi8_r", "cp1253", "cp1255", "cp874", "shift_jis", "gb18030",
                       "big5", "euc-kr", "utf-16"]
     assert mkvmerge_charset("euc-kr") == "CP949"

@@ -62,6 +62,9 @@ DEFAULT_PARALLEL_WORKERS = 4
 MAX_PARALLEL_WORKERS = 8
 MIN_PARALLEL_WORKERS = 1
 
+# Largest subtitle shift (either way) the GUI, the CLI and saved presets accept
+MAX_OFFSET_MS = 3_600_000
+
 # ──────────────────────────────────────────────────────────────
 # Filename Patterns (Regex)
 # ──────────────────────────────────────────────────────────────

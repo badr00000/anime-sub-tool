@@ -41,6 +41,7 @@ CHARSET_CHOICES = [
     ("Windows-1252 (Western)", "cp1252"),
     ("Windows-1250 (Central European)", "cp1250"),
     ("Windows-1254 (Turkish)", "cp1254"),
+    ("Windows-1258 (Vietnamese)", "cp1258"),
     ("Windows-1251 (Cyrillic)", "cp1251"),
     ("KOI8-R (Russian)", "koi8_r"),
     ("Windows-1253 (Greek)", "cp1253"),
@@ -186,36 +187,78 @@ _COMMON_HANZI = frozenset(
 )
 
 
-def _detect_cjk(data: bytes) -> Optional[str]:
-    """Shift-JIS / EUC-KR / GB18030 / Big5: the bytes must decode strictly AND give
-    enough of the letters that language is really written with. Decoding alone
-    proves nothing: these code pages accept almost any byte pair."""
+# Double-byte code pages accept an ASCII byte (0x40-0x7E) as the second byte of a
+# character. Western text in Windows-1252 is full of such pairs: ’ (0x92) followed
+# by a letter ("I’m", "don’t") is a valid Korean syllable in CP949 and a valid
+# character in GBK. Real Korean (lead 0xB0-0xC8, trail 0xA1-0xFE) and simplified
+# Chinese (GB2312) almost never use an ASCII trail byte; Japanese katakana and
+# Big5 do for part of their characters, so they get a higher limit.
+_MAX_ASCII_TRAIL_SHARE = {"shift_jis": 0.75, "euc-kr": 0.3, "gb18030": 0.3, "big5": 0.75}
+# Fewer CJK characters than this is weak evidence: a Western code page that reads
+# the file cleanly is then preferred.
+_STRONG_CJK_EVIDENCE = 3 * _MIN_EVIDENCE
+
+
+def _touches_ascii_letter(text: str, i: int) -> bool:
+    return ((i > 0 and text[i - 1].isascii() and text[i - 1].isalpha())
+            or (i + 1 < len(text) and text[i + 1].isascii() and text[i + 1].isalpha()))
+
+
+def _plausible_cjk(text: str, encoding: str, codec: str) -> bool:
+    """False when the decoded "CJK" text is really Western text read wrongly:
+    too many characters built on an ASCII trail byte, or characters glued inside
+    ASCII words ('I뭢 covering' is 'I’m covering' read as CP949)."""
+    chars = [(i, c) for i, c in enumerate(text) if ord(c) > 127]
+    if not chars:
+        return False
+    ascii_trail = 0
+    for _, c in chars:
+        try:
+            encoded = c.encode(codec)
+        except UnicodeEncodeError:
+            continue
+        if len(encoded) == 2 and 0x40 <= encoded[1] <= 0x7E:
+            ascii_trail += 1
+    if ascii_trail / len(chars) > _MAX_ASCII_TRAIL_SHARE[encoding]:
+        return False
+    letters = [i for i, c in chars if c.isalpha()]
+    glued = sum(1 for i in letters if _touches_ascii_letter(text, i))
+    return not letters or glued / len(letters) <= _MAX_MIXED_SHARE
+
+
+def _detect_cjk(data: bytes) -> Optional[tuple[str, int]]:
+    """(encoding, letter count) for Shift-JIS / EUC-KR / GB18030 / Big5: the bytes
+    must decode strictly AND give enough of the letters that language is really
+    written with. Decoding alone proves nothing: these code pages accept almost
+    any byte pair."""
     text = _strict(data, "cp932")
     if text is not None:
         letters = _foreign_letters(text)
         hiragana = sum(1 for c in letters if "぀" <= c <= "ゟ")
-        if len(letters) >= _MIN_EVIDENCE and hiragana / len(letters) >= _HIRAGANA_RATIO:
-            return "shift_jis"
+        if (len(letters) >= _MIN_EVIDENCE and hiragana / len(letters) >= _HIRAGANA_RATIO
+                and _plausible_cjk(text, "shift_jis", "cp932")):
+            return "shift_jis", len(letters)
 
     text = _strict(data, "cp949")
     if text is not None:
         letters = _foreign_letters(text)
         hangul = sum(1 for c in letters if "가" <= c <= "힣")
-        if len(letters) >= _MIN_EVIDENCE and hangul / len(letters) >= _HANGUL_RATIO:
-            return "euc-kr"
+        if (len(letters) >= _MIN_EVIDENCE and hangul / len(letters) >= _HANGUL_RATIO
+                and _plausible_cjk(text, "euc-kr", "cp949")):
+            return "euc-kr", len(letters)
 
-    best, best_score = None, 0.0
+    best, best_score, best_count = None, 0.0, 0
     for encoding, codec in (("gb18030", "gb18030"), ("big5", "cp950")):
         text = _strict(data, codec)
         if text is None:
             continue
         hanzi = [c for c in _foreign_letters(text) if "一" <= c <= "鿿"]
-        if len(hanzi) < _MIN_EVIDENCE:
+        if len(hanzi) < _MIN_EVIDENCE or not _plausible_cjk(text, encoding, codec):
             continue
         score = sum(1 for c in hanzi if c in _COMMON_HANZI) / len(hanzi)
         if score > best_score:
-            best, best_score = encoding, score
-    return best if best_score >= _COMMON_HANZI_RATIO else None
+            best, best_score, best_count = encoding, score, len(hanzi)
+    return (best, best_count) if best and best_score >= _COMMON_HANZI_RATIO else None
 
 
 # ── single-byte scripts other than Latin ──────────────────────────────────────
@@ -244,7 +287,9 @@ _HEBREW = _freq(
     "ח2.3 פ1.4 ף0.3 ס1 ג1.2 ז0.8 ט1.2 צ1 ץ0.2")
 _ARABIC = _freq(
     "ا11 أ1.5 إ0.7 آ0.3 ل11 ي7 م6 و6 ن6 ه4.5 ة2.5 ر4.5 ت4.5 ب4 ع3.5 ك3 د3 ف3 س2.5 ق2.5 "
-    "ح2 ج1.5 ى1.5 ش1 ص1 خ1 ط0.8 ء0.3 ئ0.3 ؤ0.2 ذ0.8 ز0.5 ث0.5 غ0.4 ض0.4 ظ0.2")
+    "ح2 ج1.5 ى1.5 ش1 ص1 خ1 ط0.8 ء0.3 ئ0.3 ؤ0.2 ذ0.8 ز0.5 ث0.5 غ0.4 ض0.4 ظ0.2 ـ0.1 "
+    # Persian and Urdu letters Windows-1256 also holds
+    "پ0.4 چ0.4 ژ0.05 گ0.6 ک1 ٹ0.05 ڈ0.05 ڑ0.05 ں0.1 ھ0.1 ہ0.2 ے0.2")
 _THAI = _freq(
     "า8.5 น6.5 ร5.5 อ5.3 ก5 เ4.8 ง4.5 ม4 ่4.2 ย3.4 ล3.3 ว3 ด3 ั3.4 ท2.7 ส2.5 ไ2.3 ้2.8 "
     "ี2.5 ิ2.6 บ2.2 ค2.3 ะ2 ห2 ต2 ป1.6 พ1.4 ุ1.3 จ1.3 แ1.4 ข1.1 ็1 ู0.8 ใ0.9 โ0.7 ช1 "
@@ -255,14 +300,16 @@ def _entropy(table: dict[str, float]) -> float:
     return sum(p * math.log(p) for p in table.values())
 
 
-# (encoding id, letter frequencies, script has upper/lower case)
+# (encoding id, letter frequencies, script has upper/lower case, combining marks
+# are letters). Only Thai writes vowels as combining marks; Arabic harakat
+# (tashkeel) and Hebrew points are optional decoration and are left out.
 _SCRIPT_CANDIDATES = [
-    ("cp1256", _ARABIC, False),
-    ("cp1251", _RUSSIAN, True),
-    ("koi8_r", _RUSSIAN, True),
-    ("cp1253", _GREEK, True),
-    ("cp1255", _HEBREW, False),
-    ("cp874", _THAI, False),
+    ("cp1256", _ARABIC, False, False),
+    ("cp1251", _RUSSIAN, True, False),
+    ("koi8_r", _RUSSIAN, True, False),
+    ("cp1253", _GREEK, True, False),
+    ("cp1255", _HEBREW, False, False),
+    ("cp874", _THAI, False, True),
 ]
 
 _UNSEEN_LETTER_P = 0.0005
@@ -277,22 +324,18 @@ _MAX_CASE_FLIPS = 0.03
 _MAX_MIXED_SHARE = 0.2
 
 
-def _letters_and_marks(text: str) -> list[int]:
-    """Positions of non-ASCII letters and combining marks (Thai vowels are marks)."""
+def _letters_and_marks(text: str, marks: bool) -> list[int]:
+    """Positions of non-ASCII letters, plus combining marks when `marks` (Thai
+    vowels are marks; Arabic harakat are not letters and are skipped)."""
     return [i for i, c in enumerate(text)
-            if ord(c) > 127 and (c.isalpha() or unicodedata.category(c).startswith("M"))]
+            if ord(c) > 127 and (c.isalpha() or (marks and unicodedata.category(c).startswith("M")))]
 
 
-def _touches_ascii_letter(text: str, i: int) -> bool:
-    return ((i > 0 and text[i - 1].isascii() and text[i - 1].isalpha())
-            or (i + 1 < len(text) and text[i + 1].isascii() and text[i + 1].isalpha()))
-
-
-def _script_score(text: str, table: dict[str, float],
-                  bicameral: bool) -> Optional[tuple[float, int]]:
+def _script_score(text: str, table: dict[str, float], bicameral: bool,
+                  marks: bool = False) -> Optional[tuple[float, int]]:
     """(mean ln p relative to the language's entropy, letter count) of the text as
     this language; None when it cannot be."""
-    positions = _letters_and_marks(text)
+    positions = _letters_and_marks(text, marks)
     if not positions:
         return None
     letters = [text[i] for i in positions]
@@ -321,11 +364,11 @@ def _script_score(text: str, table: dict[str, float],
 def _detect_script(data: bytes) -> Optional[str]:
     sample = data[:_SAMPLE_BYTES]
     scores = []
-    for encoding, table, bicameral in _SCRIPT_CANDIDATES:
+    for encoding, table, bicameral, marks in _SCRIPT_CANDIDATES:
         text = _strict(sample, encoding)
         if text is None:
             continue
-        result = _script_score(text, table, bicameral)
+        result = _script_score(text, table, bicameral, marks)
         if result is not None:
             scores.append((result[0], result[1], encoding))
     if not scores:
@@ -359,8 +402,12 @@ _LATIN_LETTERS = {
 # On a tie Turkish goes before Central European: the bytes both accept are
 # Turkish 'ı ş ğ' but Czech 'ý', Romanian 'ţ' and Croatian 'đ' together.
 _LATIN_ORDER = ("cp1252", "cp1254", "cp1250")
-# Punctuation that may sit between two letters ("l’école")
-_IN_WORD_PUNCTUATION = frozenset("’‘·–—­")
+# Typographic punctuation that may sit between two letters: "l’école", "I…I",
+# "Wait…what?", "word“hope”means", "one•two", "rock–paper". Every one of these
+# is the same byte in Windows-1250, -1252 and -1254, so it never stands for a
+# letter of another Latin code page. Other symbols between letters ('mo¿e',
+# 'by³o') are letters of a different code page and stay problems.
+_IN_WORD_PUNCTUATION = frozenset("’‘“”…•·–—­ ™")
 # Above this share of high-byte letters standing in words without any ASCII
 # letter, the text is not a Latin language ('Да' read as 1252 is 'Äà').
 _MAX_ALL_HIGH_WORDS = 0.5
@@ -379,6 +426,40 @@ def _latin_problems(text: str, allowed: frozenset[str]) -> int:
               and c not in _IN_WORD_PUNCTUATION):
             problems += 1
     return problems
+
+
+# ── Vietnamese (Windows-1258) ─────────────────────────────────────────────────
+#
+# Windows-1258 writes most Vietnamese tones as a combining mark after the vowel
+# ('Vie' + U+0323 + 't'). Read as Windows-1250 the same bytes are 'ě ň Ţ Ň Ě',
+# all valid Central European letters, so Vietnamese has to be checked first.
+
+_VIETNAMESE_TONES = frozenset("̣̀́̃̉")
+_VIETNAMESE_VOWELS = _with_upper("aăâeêioôơuưy")
+# Letters Windows-1258 holds precomposed that Vietnamese uses
+_VIETNAMESE_LETTERS = _with_upper("àáâăèéêíóôơùúưđ")
+# Letters only Vietnamese uses (bytes that are ã õ ð ý in Windows-1252)
+_VIETNAMESE_ONLY = _with_upper("ăơưđ")
+_MIN_TONES_AFTER_VOWEL_SHARE = 0.8
+
+
+def _detect_vietnamese(data: bytes) -> Optional[str]:
+    """'cp1258' for clear Vietnamese, ENCODING_UNCERTAIN when the bytes look like
+    Vietnamese tones but not clearly enough, None when they are not Vietnamese."""
+    text = _strict(data[:_SAMPLE_BYTES], "cp1258")
+    if text is None:
+        return None
+    tones = [i for i, c in enumerate(text) if c in _VIETNAMESE_TONES]
+    after_vowel = sum(1 for i in tones if i > 0 and text[i - 1] in _VIETNAMESE_VOWELS)
+    specific = sum(1 for c in text if c in _VIETNAMESE_ONLY)
+    if (after_vowel < 3 or after_vowel / len(tones) < _MIN_TONES_AFTER_VOWEL_SHARE
+            or not specific):
+        return None
+    without_tones = "".join(c for c in text if c not in _VIETNAMESE_TONES)
+    if (after_vowel >= _MIN_EVIDENCE and specific >= 3
+            and _latin_problems(without_tones, _VIETNAMESE_LETTERS) == 0):
+        return "cp1258"
+    return ENCODING_UNCERTAIN
 
 
 def _all_high_word_share(text: str) -> float:
@@ -415,7 +496,9 @@ def detect_encoding(data: bytes) -> Optional[str]:
     fits, or None when the data is not text.
 
     Order: BOM -> UTF-16 without BOM -> strict UTF-8 -> CJK code pages ->
-    Arabic / Cyrillic / Greek / Hebrew / Thai -> Western, Central European, Turkish.
+    Arabic / Cyrillic / Greek / Hebrew / Thai -> Vietnamese -> Western, Central
+    European, Turkish. A CJK guess backed by only a few characters gives way to a
+    Western code page that reads the file without a single odd character.
     """
     bom = _bom_encoding(data)
     if bom:
@@ -427,7 +510,16 @@ def detect_encoding(data: bytes) -> Optional[str]:
         return None
     if _strict(data, "utf-8") is not None:
         return "utf-8"
-    return _detect_cjk(data) or _detect_script(data) or _detect_latin(data) or ENCODING_UNCERTAIN
+    cjk = _detect_cjk(data)
+    if cjk is not None:
+        encoding, count = cjk
+        if count < _STRONG_CJK_EVIDENCE:
+            latin = _detect_latin(data)
+            if latin:
+                return latin
+        return encoding
+    return (_detect_script(data) or _detect_vietnamese(data) or _detect_latin(data)
+            or ENCODING_UNCERTAIN)
 
 
 def detect_file_encoding(path: Path) -> Optional[str]:

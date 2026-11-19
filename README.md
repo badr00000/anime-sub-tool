@@ -109,8 +109,15 @@ py -3.11 main.py --help
 ```
 
 `process` options: `--workers N` (1-8), `--output DIR`, `--dry-run`, `--yes`,
-`--offset SECONDS`, `--sub-charset NAME`, `--keep-original-subs`, `--overwrite`,
-`--include-unmatched`. Defaults (language, track name, workers, subfolder,
+`--offset SECONDS`, `--sub-charset NAME`, `--keep-audio LANGS`, `--keep-subs LANGS`,
+`--keep-original-subs`, `--overwrite`, `--include-unmatched`.
+
+By default `process` keeps only Japanese audio (every audio track when an episode
+has no Japanese one) and removes every subtitle already in the episode.
+`--keep-audio jpn,eng` keeps those audio languages, `--keep-audio all` keeps all
+audio; `--keep-subs eng` keeps the original English subtitles while removing the
+rest. Any spelling works (`ja`, `jpn`, `ja-JP`). When the new subtitle is set as
+default, kept original subtitles lose their default flag. Defaults (language, track name, workers, subfolder,
 MKVToolNix folder) come from the same settings file the GUI uses.
 
 `shift` refuses to write over the file it read unless `--force` is given.

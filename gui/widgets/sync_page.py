@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from core import subtitle_file as sf
-from core.constants import VIDEO_EXTENSIONS
+from core.constants import MAX_OFFSET_MS, VIDEO_EXTENSIONS
 from core.subtitles import (
     CHARSET_AUTO, CHARSET_CHOICES, ENCODING_UNCERTAIN, UNCERTAIN_HINT, describe_encoding,
 )
@@ -295,7 +295,7 @@ class SyncPage(QWidget):
         exact_cap.setStyleSheet(f"color: {Colors.text_muted}; font-size: 10px;")
         exact_row = QHBoxLayout()
         self.exact = QDoubleSpinBox()
-        self.exact.setRange(-3600.0, 3600.0)
+        self.exact.setRange(-MAX_OFFSET_MS / 1000, MAX_OFFSET_MS / 1000)
         self.exact.setDecimals(3)
         self.exact.setSingleStep(0.05)
         self.exact.setSuffix(" s")
@@ -640,6 +640,11 @@ class SyncPage(QWidget):
             messages.warn(self, "Choose the encoding first",
                           f"The subtitle {UNCERTAIN_HINT} (SUBTITLE ENCODING, on the right). "
                           "Pick the one that makes the text readable, then save.")
+            return
+        if sf.all_cues_gone(self._sub, self._offset):
+            messages.warn(self, "Offset too large",
+                          f"A {sf.format_offset(self._offset)} shift moves every line to or before "
+                          "0:00, so the saved subtitle would show nothing. Use a smaller offset.")
             return
         # Saving onto the loaded file (Save As onto it, or Save for a file that is
         # already a '.synced' copy) destroys the source: only after an explicit yes.

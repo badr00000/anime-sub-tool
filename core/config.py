@@ -15,14 +15,14 @@ from pathlib import Path
 from typing import Any
 
 from core.constants import (
-    CONFIG_DIR_NAME, CONFIG_FILE_NAME, MAX_PARALLEL_WORKERS, MIN_PARALLEL_WORKERS,
+    CONFIG_DIR_NAME, CONFIG_FILE_NAME, MAX_OFFSET_MS, MAX_PARALLEL_WORKERS, MIN_PARALLEL_WORKERS,
 )
 from core.models import AppConfig
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_MAX_OFFSET_MS = 3_600_000
+_MAX_OFFSET_MS = MAX_OFFSET_MS
 _INVALID_FOLDER_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
@@ -164,8 +164,40 @@ _CONFIG_FIELDS = {
 }
 
 
+# The config file the last load_config() could not read. The next save moves it
+# aside first, so the presets in it are never silently overwritten.
+_unreadable_config: Path | None = None
+
+
+def _backup_path(config_file: Path) -> Path:
+    """'config.json.bad', or 'config.json.bad.2', '.bad.3', ... when taken."""
+    candidate = config_file.with_name(config_file.name + ".bad")
+    n = 2
+    while candidate.exists():
+        candidate = config_file.with_name(f"{config_file.name}.bad.{n}")
+        n += 1
+    return candidate
+
+
+def _set_aside_unreadable(config_file: Path) -> None:
+    global _unreadable_config
+    if _unreadable_config is None or _unreadable_config != config_file:
+        return
+    _unreadable_config = None
+    if not config_file.exists():
+        return
+    backup = _backup_path(config_file)
+    try:
+        config_file.replace(backup)
+        logger.warning(f"The unreadable config file was kept as {backup} before saving "
+                       "new settings; its presets can be recovered from there.")
+    except OSError as e:
+        logger.warning(f"Could not keep a copy of the unreadable config file ({e}).")
+
+
 def load_config() -> AppConfig:
     """Load the configuration. Never raises: anything unusable falls back to its default."""
+    global _unreadable_config
     config = AppConfig()
     config_file = _get_config_file()
     try:
@@ -174,11 +206,14 @@ def load_config() -> AppConfig:
         with open(config_file, "r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception as e:  # unreadable, not UTF-8, not JSON, ...
-        logger.warning(f"Could not load config ({e}); using defaults.")
+        logger.warning(f"Could not load config ({e}); using defaults. The file is kept as "
+                       f"{config_file.name}.bad when settings are next saved.")
+        _unreadable_config = config_file
         return config
 
     if not isinstance(data, dict):
         logger.warning("Config file does not contain a JSON object; using defaults.")
+        _unreadable_config = config_file
         return config
 
     for key, validate in _CONFIG_FIELDS.items():
@@ -195,6 +230,7 @@ def load_config() -> AppConfig:
 def save_config(config: AppConfig) -> bool:
     """Save the configuration. Returns True on success."""
     config_file = _get_config_file()
+    _set_aside_unreadable(config_file)
     try:
         config_file.parent.mkdir(parents=True, exist_ok=True)
         data = dataclasses.asdict(config)

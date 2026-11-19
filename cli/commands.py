@@ -78,7 +78,7 @@ def scan(folder):
         safe_echo(f"  {'---':<6} {'---':<40} {'---':<40} {'---'}")
 
         for match in result.matches:
-            ep = match.video.episode_num or "?"
+            ep = match.video.label
             vid = _clip(match.video.filename)
             sub = _clip(match.subtitle.filename) if match.subtitle else "-- None --"
             if match.subtitle:
@@ -120,6 +120,30 @@ def _check_charset(ctx, param, value):
     return value
 
 
+_LANG_CODE = __import__("re").compile(r"^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8})*$")
+
+
+def _check_languages(ctx, param, value):
+    """'jpn,en, ja-JP' -> ['jpn', 'eng', 'jpn']; '' or 'all' -> [] (no filter).
+    None (option not given) keeps the default."""
+    from core.languages import normalize
+    if value is None:
+        return None
+    if value.strip().lower() in ("", "all"):
+        return []
+    codes = []
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if not _LANG_CODE.match(item):
+            raise click.BadParameter(f"'{item}' is not a language code (e.g. jpn, ja, eng).")
+        code = normalize(item)
+        if code not in codes:
+            codes.append(code)
+    return codes
+
+
 def _processing_options(func):
     """Options shared by `preview` and `process`, so the preview shows what process will do."""
     decorators = [
@@ -130,9 +154,19 @@ def _processing_options(func):
                      help='Shift the new subtitle in seconds: positive = later (delay), negative = earlier'),
         click.option('--sub-charset', default='auto', show_default=True, callback=_check_charset,
                      help="Subtitle encoding: 'auto', 'utf-8', 'cp1256' (Arabic), 'cp1252', "
-                          "'cp1250', 'cp1254', 'cp1251', 'koi8_r', 'cp1253', 'cp1255', 'cp874', "
+                          "'cp1250', 'cp1254', 'cp1258', 'cp1251', 'koi8_r', 'cp1253', 'cp1255', 'cp874', "
                           "'shift_jis', 'gb18030', 'big5', 'euc-kr', 'utf-16' (or another name "
                           "mkvmerge knows, e.g. 'iso8859_2')"),
+        click.option('--keep-audio', 'keep_audio', default=None, callback=_check_languages,
+                     metavar='LANGS',
+                     help="Audio languages to keep, comma separated (jpn, ja, eng, ...). "
+                          "'all' or '' keeps every audio track. Default: jpn (an episode "
+                          "without Japanese audio keeps all of its audio)"),
+        click.option('--keep-subs', 'keep_subs', default=None, callback=_check_languages,
+                     metavar='LANGS',
+                     help="Original subtitle languages NOT removed, comma separated "
+                          "(default: none, every original subtitle is removed). "
+                          "Ignored with --keep-original-subs"),
         click.option('--keep-original-subs', is_flag=True,
                      help='Keep the subtitles already inside each episode (default: remove them)'),
         click.option('--overwrite', is_flag=True,
@@ -146,8 +180,12 @@ def _processing_options(func):
 
 
 def _build_options(config, output, offset, sub_charset, keep_original_subs, overwrite,
-                   include_unmatched, **extra) -> ProcessingOptions:
+                   include_unmatched, keep_audio=None, keep_subs=None, **extra) -> ProcessingOptions:
     opts = ProcessingOptions.from_config(config)
+    if keep_audio is not None:
+        opts.keep_audio_langs = keep_audio
+    if keep_subs is not None:
+        opts.keep_sub_langs = keep_subs
     opts.output_dir = Path(output).resolve() if output else None
     opts.subtitle_offset_ms = round(offset * 1000)
     opts.subtitle_charset = sub_charset
@@ -162,7 +200,8 @@ def _build_options(config, output, offset, sub_charset, keep_original_subs, over
 @cli.command()
 @click.argument('folder', type=click.Path(exists=True, file_okay=False, dir_okay=True))
 @_processing_options
-def preview(folder, output, offset, sub_charset, keep_original_subs, overwrite, include_unmatched):
+def preview(folder, output, offset, sub_charset, keep_audio, keep_subs, keep_original_subs,
+            overwrite, include_unmatched):
     """Preview what would happen without making changes."""
     try:
         folder_path = validate_folder_path(folder)
@@ -177,7 +216,7 @@ def preview(folder, output, offset, sub_charset, keep_original_subs, overwrite, 
             return
 
         opts = _build_options(config, output, offset, sub_charset, keep_original_subs,
-                              overwrite, include_unmatched)
+                              overwrite, include_unmatched, keep_audio, keep_subs)
         preview_data = engine.generate_preview(scan_result, opts)
 
         safe_echo(click.style(f"\n[OK] Preview -- {len(preview_data.episodes)} episodes:", fg='green'))
@@ -206,9 +245,14 @@ def preview(folder, output, offset, sub_charset, keep_original_subs, overwrite, 
 @click.option('--dry-run', is_flag=True, help='Simulate without making changes')
 @click.option('--yes', '-y', is_flag=True, help='Skip confirmation prompt')
 @_processing_options
-def process(folder, workers, dry_run, yes, output, offset, sub_charset, keep_original_subs,
-            overwrite, include_unmatched):
-    """Process a folder -- embed subtitles and filter audio tracks."""
+def process(folder, workers, dry_run, yes, output, offset, sub_charset, keep_audio, keep_subs,
+            keep_original_subs, overwrite, include_unmatched):
+    """Process a folder -- embed subtitles and filter audio tracks.
+
+    By default only Japanese audio is kept (all audio when an episode has no
+    Japanese track) and every original subtitle is removed; see --keep-audio,
+    --keep-subs and --keep-original-subs.
+    """
     try:
         folder_path = validate_folder_path(folder)
         config = load_config()
@@ -216,7 +260,7 @@ def process(folder, workers, dry_run, yes, output, offset, sub_charset, keep_ori
         validate_mkvtoolnix(engine.mkv_tools)
 
         opts = _build_options(config, output, offset, sub_charset, keep_original_subs,
-                              overwrite, include_unmatched, dry_run=dry_run)
+                              overwrite, include_unmatched, keep_audio, keep_subs, dry_run=dry_run)
         if workers is not None:
             opts.parallel_workers = workers
 
@@ -298,6 +342,10 @@ def shift(subtitle, offset, output, force):
         if not sub.cues:
             raise ValueError(f"'{sub.path.name}' contains no subtitle lines; nothing to shift.")
         offset_ms = round(offset * 1000)
+        if sf.all_cues_gone(sub, offset_ms):
+            raise ValueError(f"A {sf.format_offset(offset_ms)} shift moves every line of "
+                             f"'{sub.path.name}' to or before 0:00; nothing would be left. "
+                             "Use a smaller offset.")
         clamped = sf.count_clamped(sub, offset_ms)
         out = sf.save_shifted(sub, offset_ms, Path(output).resolve() if output else None, force=force)
         if clamped:

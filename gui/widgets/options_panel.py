@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from core.config import DEFAULT_PRESET_NAME, clean_preset, is_reserved_preset_name, save_config
-from core.constants import MAX_PARALLEL_WORKERS, MIN_PARALLEL_WORKERS
+from core.constants import MAX_OFFSET_MS, MAX_PARALLEL_WORKERS, MIN_PARALLEL_WORKERS
 from core.languages import name_of
 from core.models import AppConfig, ProcessingOptions
 from core.subtitles import CHARSET_CHOICES
@@ -104,7 +104,8 @@ class OptionsPanel(QWidget):
         subtitle_layout = QVBoxLayout(subtitle_group)
 
         self.offset_spin = QDoubleSpinBox()
-        self.offset_spin.setRange(-600.0, 600.0)
+        # Same limit as the CLI and saved presets, so no preset is clamped silently
+        self.offset_spin.setRange(-MAX_OFFSET_MS / 1000, MAX_OFFSET_MS / 1000)
         self.offset_spin.setDecimals(3)
         self.offset_spin.setSingleStep(0.1)
         self.offset_spin.setSuffix(" s")

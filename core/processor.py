@@ -110,6 +110,11 @@ class EpisodeProcessor:
         if not sub.cues:
             return (f"Subtitle {sub_path.name} contains no subtitle lines "
                     "(empty or damaged file); nothing was merged."), []
+        if subtitle_file.all_cues_gone(sub, self.options.subtitle_offset_ms):
+            return (f"Subtitle {sub_path.name}: the "
+                    f"{subtitle_file.format_offset(self.options.subtitle_offset_ms)} shift moves every "
+                    "line to or before 0:00, so the new track would be empty; nothing was merged. "
+                    "Use a smaller offset."), []
 
         warnings = []
         if sub.encoding == ENCODING_UNCERTAIN and self._auto_charset():
@@ -125,9 +130,11 @@ class EpisodeProcessor:
     # ── processing ──
 
     def process(self, match: EpisodeMatch, progress_callback: Optional[Callable[[int], None]] = None,
-                cancel_event: Optional[threading.Event] = None) -> ProcessingResult:
+                cancel_event: Optional[threading.Event] = None,
+                on_start: Optional[Callable[[], None]] = None) -> ProcessingResult:
         """Merge one episode. `cancel_event` set before a mkvmerge run starts cancels
-        the episode (checked by the wrapper right before each start)."""
+        the episode (checked by the wrapper right before each start). `on_start` is
+        called once the checks passed and the episode is really processed."""
         blocked = self._precheck(match)
         if blocked:
             return blocked
@@ -141,6 +148,8 @@ class EpisodeProcessor:
             error, pre_warnings = self._inspect_subtitle(sub_path)
             if error:
                 return ProcessingResult(status=ProcessingStatus.FAILED, output_path=output_path, message=error)
+        if on_start is not None:
+            on_start()
 
         # 1. Identify tracks
         file_info = self.mkv_tools.identify(str(video_path), cancel_event=cancel_event)
@@ -190,6 +199,14 @@ class EpisodeProcessor:
             elif sub_track_ids is not None and edited_track_id not in sub_track_ids:
                 sub_track_ids.append(edited_track_id)  # ensure it's kept
 
+        # A new default subtitle must be the only default one: a kept original
+        # (usually the English track, flagged default) would otherwise still be
+        # what players show. Originals stay as they are when the new one is not default.
+        clear_default_ids: list[int] = []
+        if sub_path and self.options.set_default:
+            kept = [t.id for t in sub_tracks] if sub_track_ids is None else sub_track_ids
+            clear_default_ids = [i for i in kept if i is not None]
+
         # 4. The output folder is only created now, when we really write
         try:
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -233,6 +250,7 @@ class EpisodeProcessor:
                 edit_new_name=self.options.edit_new_name,
                 sub_offset_ms=self.options.subtitle_offset_ms,
                 sub_charset=sub_charset,
+                clear_default_track_ids=clear_default_ids,
                 progress_callback=progress_callback,
                 cancel_event=cancel_event,
             )
@@ -288,7 +306,7 @@ class EpisodeProcessor:
         # Same path process() will write to, without touching the disk
         output_path = self.output_path(video_path)
         preview = EpisodePreview(
-            episode_num=match.video.episode_num or "?",
+            episode_num=match.video.label,
             video_name=video_path.name,
             subtitle_name=match.subtitle.filepath.name if match.subtitle else None,
             output_path=output_path,

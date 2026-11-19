@@ -33,8 +33,10 @@ class _SearchProxy(QSortFilterProxyModel):
         self._words: list[str] = []
 
     def set_query(self, text: str):
+        # beginFilterChange()/endFilterChange() replace the deprecated invalidateFilter()
+        self.beginFilterChange()
         self._words = _fold(text).split()
-        self.invalidateFilter()
+        self.endFilterChange()
 
     def filterAcceptsRow(self, row: int, parent: QModelIndex) -> bool:
         if not self._words:

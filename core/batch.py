@@ -59,7 +59,7 @@ class BatchProcessor:
             if self._cancel_event.is_set():
                 return ProcessingResult(status=ProcessingStatus.CANCELLED, output_path=None, message="Cancelled")
 
-            episode_num = match.video.episode_num or "?"
+            episode_num = match.video.label
             if index in clashes:
                 _log(f"Failed processing episode {episode_num}: {clashes[index]}", "ERROR")
                 return ProcessingResult(status=ProcessingStatus.FAILED, message=clashes[index])
@@ -74,9 +74,9 @@ class BatchProcessor:
                 if options.dry_run:
                     res = self.processor.dry_run(match)
                 else:
-                    _log(f"Starting processing for episode {episode_num}")
-                    res = self.processor.process(match, progress_callback=local_progress,
-                                                 cancel_event=self._cancel_event)
+                    res = self.processor.process(
+                        match, progress_callback=local_progress, cancel_event=self._cancel_event,
+                        on_start=lambda: _log(f"Starting processing for episode {episode_num}"))
             except Exception as e:
                 logger.exception(f"Unexpected error on episode {episode_num}")
                 res = ProcessingResult(status=ProcessingStatus.FAILED, output_path=None, message=str(e))
@@ -118,7 +118,7 @@ class BatchProcessor:
                     if progress_callback:
                         # Update overall progress at the end of each episode
                         overall = int((completed_episodes * 100) / total_episodes)
-                        progress_callback(match.video.episode_num or "?", 100, overall)
+                        progress_callback(match.video.label, 100, overall)
         except BaseException:
             # Ctrl+C (KeyboardInterrupt) or any other abort: a plain `with` block would
             # wait for every queued episode to run. Stop everything instead.

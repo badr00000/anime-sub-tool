@@ -89,6 +89,15 @@ class EpisodeInfo:
     extra_kind: str = ""
     # Text subtitles only: human-readable detected encoding, filled in by the scan.
     encoding: str = ""
+    # Release version: 2 for 'Show - 01v2', else 1.
+    version: int = 1
+
+    @property
+    def label(self) -> str:
+        """How the episode is named in tables and logs: '5', 'NCOP 1', 'ED', '?'."""
+        if self.extra_kind:
+            return f"{self.extra_kind} {self.episode_num}" if self.episode_num else self.extra_kind
+        return self.episode_num or "?"
 
 
 @dataclass

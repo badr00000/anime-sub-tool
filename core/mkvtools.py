@@ -214,9 +214,14 @@ class MKVToolsWrapper:
               edit_new_name: str = "Arabic",
               sub_offset_ms: int = 0,
               sub_charset: Optional[str] = None,
+              clear_default_track_ids: Optional[list[int]] = None,
               progress_callback: Optional[Callable[[int], None]] = None,
               cancel_event: Optional[threading.Event] = None) -> ProcessingResult:
-        """Build and execute mkvmerge command. Parse real-time 'Progress: XX%' from stdout."""
+        """Build and execute mkvmerge command. Parse real-time 'Progress: XX%' from stdout.
+
+        clear_default_track_ids: original tracks whose "default track" flag is
+        switched off, so the new subtitle is the one players pick.
+        """
         try:
             video_arg = _path_arg(video_path)
             output_arg = _path_arg(output_path)
@@ -251,13 +256,16 @@ class MKVToolsWrapper:
             if edit_new_name:
                 cmd.extend(["--track-name", f"{edit_track_id}:{edit_new_name}"])
 
+        for track_id in clear_default_track_ids or ():
+            cmd.extend(["--default-track-flag", f"{int(track_id)}:no"])
+
         cmd.append(video_arg)
 
         # New subtitle file
         if subtitle_arg:
             cmd.extend(["--language", f"0:{sub_language}"])
             cmd.extend(["--track-name", f"0:{sub_name}"])
-            cmd.extend(["--default-track", "0:yes" if sub_default else "0:no"])
+            cmd.extend(["--default-track-flag", "0:yes" if sub_default else "0:no"])
             if sub_offset_ms:
                 cmd.extend(["--sync", f"0:{int(sub_offset_ms)}"])
             if sub_charset:

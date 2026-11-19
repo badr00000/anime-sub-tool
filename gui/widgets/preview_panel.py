@@ -69,7 +69,7 @@ class PreviewPanel(QWidget):
 
         for i, match in enumerate(matches):
             # Episode number
-            ep_num = match.video.episode_num or "?"
+            ep_num = match.video.label
             ep_item = QTableWidgetItem(str(ep_num))
             ep_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
