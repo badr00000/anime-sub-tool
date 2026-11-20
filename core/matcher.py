@@ -349,6 +349,23 @@ def scan_folder(folder_path: Path) -> tuple[list[EpisodeInfo], list[EpisodeInfo]
             [extract_episode_info(s) for s in subtitles])
 
 
+def _stated_years(info: EpisodeInfo) -> set[str]:
+    """The 19xx/20xx years a name states, not counting the episode number itself
+    ('One Piece - 2023' is episode 2023, not a year)."""
+    years = _YEAR.findall(info.filepath.stem.lower())
+    if info.episode_num in years:
+        years.remove(info.episode_num)
+    return set(years)
+
+
+def _years_conflict(video: EpisodeInfo, sub: EpisodeInfo) -> bool:
+    """Both names state years and share none: two remakes or two different films
+    ('Fruits Basket (2001)' vs '(2019)', 'Blade Runner (1982)' vs '2049 (2017)').
+    Titles are compared without years, so this is what keeps them apart."""
+    video_years, sub_years = _stated_years(video), _stated_years(sub)
+    return bool(video_years) and bool(sub_years) and not (video_years & sub_years)
+
+
 def _normalize_title(title: Optional[str]) -> str:
     """Lower case, punctuation gone, and without a 19xx/20xx year ('Show 2023' and
     'Show (2023)' are the same title), unless the year is the whole title."""
@@ -697,6 +714,8 @@ def match_files(videos: list[EpisodeInfo], subtitles: list[EpisodeInfo],
         for sub, tag in by_key.get(key, []):
             if vid.season is not None and sub.season is not None and vid.season != sub.season:
                 continue
+            if _years_conflict(vid, sub):
+                continue    # 'Fruits Basket (2001)' is not 'Fruits Basket (2019)'
             if (key[0] == "episode" and _is_film_marked(vid) != _is_film_marked(sub)
                     and _comparable_stem(vid) != _comparable_stem(sub)):
                 continue    # 'Conan Movie 26' is not episode 26, nor the other way round

@@ -54,7 +54,10 @@ It also includes a small standalone tool to fix subtitle timing (Sync Subtitle).
     such as `Special`, `Ending` or `Opening` in a show's title never costs that
     show its own subtitle (`Special A - 03.mkv` keeps `Special A - 03.ar.srt` in
     a folder that also holds `Sousou no Frieren - 03.mkv`). Years are ignored
-    in the title match (`Show 2023 - 01` and `Show (2023) - 01` are equal);
+    in the title match (`Show 2023 - 01` and `Show (2023) - 01` are equal), but
+    when both names state a year and the years differ they never pair, so two
+    remakes stay apart (`Fruits Basket (2001) - 05` does not take
+    `Fruits Basket (2019) - 05.ar.ass`);
   - **films and other files without an episode number** pair on their name, with
     bracket tags, release tags (`1080p`, `BluRay`, `x265`, …), years, a trailing
     scene group (`-GROUP`) and the subtitle's language code ignored:
