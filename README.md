@@ -7,6 +7,18 @@ separate folder. **The original files are never modified.**
 
 It also includes a small standalone tool to fix subtitle timing (Sync Subtitle).
 
+## Download
+
+Get **`AnimeSubTool.exe`** from the
+[latest release](https://github.com/badr00000/anime-sub-tool/releases/latest).
+It is a single portable file for Windows (64-bit): no installation, nothing
+else to download. Double-click it to start; the first launch takes a few
+seconds while it unpacks.
+
+The file is not code-signed, so Windows SmartScreen may show "Windows protected
+your PC". Click **More info → Run anyway**. The release page lists the file's
+SHA-256 if you want to verify the download.
+
 ## Features
 
 - **Merge Season** — a four-step wizard: *Select* a folder, *Preview* the
