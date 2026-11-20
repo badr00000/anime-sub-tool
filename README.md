@@ -32,25 +32,36 @@ It also includes a small standalone tool to fix subtitle timing (Sync Subtitle).
   - a multi-episode file such as `01-02` is matched by its first number;
   - a `Movie N` / `Film N` / `Gekijouban` file is a film, not episode N:
     `Detective Conan Movie 26.mkv` only pairs with a subtitle that is also marked
-    as a film (`Detective Conan Movie 26.ar.srt`), never with `Detective Conan - 26.srt`;
+    as a film (`Detective Conan Movie 26.ar.srt`), never with `Detective Conan - 26.srt`.
+    `Movie` / `Film` only count followed by a number or at the end of the title
+    (`Show the Movie`), not inside one (`Film Club - 03`, `Movie Maker - 01`);
   - if `Show - 01.srt` and `Show - 01.synced.srt` both exist, the synced copy is
     used; `Show - 01v2.srt` is preferred over `Show - 01.srt`;
   - the full subtitle beats partial or alternative tracks: `Show - 03.srt` wins
     over `Show - 03 [Signs].ass`, `(Signs & Songs)`, `.forced.srt`, `(CC)`, `SDH`,
     `karaoke`, `commentary`, `alt`, `old`, `- Copy`, `Preview`. Such a track is
-    only paired when it is the only candidate, and then flagged `⚠ CHECK`;
+    only paired when it is the only candidate, and then flagged `⚠ CHECK`.
+    A word that is part of the show's title or of the leading group tag does not
+    count (`Signs of Love - 05.ass`, `[Old Group] Show - 03.ass`), but the same
+    word added again does (`Signs of Love - 05 [Signs].ass`);
     between otherwise equal subtitles the one named exactly like the episode wins;
   - when several files compete for the same subtitle, every possible pair is
     ranked and the best pairs are taken first, so the result does not depend on
     the file order (equal pairs are decided by file name):
     `5 Centimeters per Second (2007).mkv` (read as episode 5) does not take
     `Show - 05.srt` away from `Show - 05.mkv`. A subtitle whose title is
-    unrelated (title match under 50%) never beats a well-titled one;
+    unrelated (title match under 50%) never beats a well-titled one, and a word
+    such as `Special`, `Ending` or `Opening` in a show's title never costs that
+    show its own subtitle (`Special A - 03.mkv` keeps `Special A - 03.ar.srt` in
+    a folder that also holds `Sousou no Frieren - 03.mkv`). Years are ignored
+    in the title match (`Show 2023 - 01` and `Show (2023) - 01` are equal);
   - **films and other files without an episode number** pair on their name, with
     bracket tags, release tags (`1080p`, `BluRay`, `x265`, …), years, a trailing
     scene group (`-GROUP`) and the subtitle's language code ignored:
     `Suzume.2022.1080p.BluRay.x265-GROUP.mkv` pairs with `Suzume.ar.srt` or
-    `Suzume.2022.ar.srt`. A title that is only a year (`1917`) is kept. A year
+    `Suzume.2022.ar.srt`. A title that is only a year (`1917`) is kept; with two
+    years the first is the title (`2012.2009.1080p.BluRay.x264-GRP.mkv` pairs with
+    `2012.srt`). A year
     at the end of a name (`Perfect Blue 1997.mkv`, `Your Name 2016.mkv`) is a
     year, not episode 1997; a year-like number right after ` - `, `E`, `Ep`,
     `Episode` or `#` is still an episode number (`One Piece - 1071`,
@@ -60,7 +71,10 @@ It also includes a small standalone tool to fix subtitle timing (Sync Subtitle).
     `.ar`, `.ara`, `.en`, `.eng`, `.ja` (any code, alias or name the language
     dropdowns know) or a bracket such as `(English)`, `[ENG]`, `(عربي)`, `[Arabic]`.
     A subtitle in the language you chose for the new track (Subtitle *Language*
-    option, default from Settings) wins, then one without a tag; one tagged with
+    option, default from Settings) wins over one without a tag whenever its title
+    match is at least 50%, even if the untagged one is named exactly like the
+    episode (`Dandadan - 05.mkv` takes `Dan Da Dan - 05.ar.srt` over
+    `Dandadan - 05.srt`); under 50% the well-titled one wins. One tagged with
     another language never beats those, unless their title is unrelated (under
     50%: `Frieren - 01.mkv` takes `Frieren - 01.en.srt`, flagged, rather than
     `Oshi no Ko - 01.srt`). If it is the only candidate it is still
@@ -160,7 +174,8 @@ py -3.11 main.py --help
 ```
 
 `scan`, `preview` and `process` all print the pairs to check (`[!] Check: ...`:
-another language in the subtitle name, a season only assumed, a partial track);
+a title match under 50% (LOW), another language in the subtitle name, a season
+only assumed, a partial track);
 `process` prints them before the confirmation prompt and before anything runs.
 
 `process` options: `--workers N` (1-8), `--output DIR`, `--dry-run`, `--yes`,

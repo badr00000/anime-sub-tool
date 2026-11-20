@@ -19,7 +19,7 @@ if sys.platform == 'win32':
     os.environ.setdefault('PYTHONIOENCODING', 'utf-8')
 
 from core.config import _MAX_OFFSET_MS, load_config
-from core.models import ProcessingOptions
+from core.models import MatchConfidence, ProcessingOptions
 from core.constants import (
     APP_NAME, APP_VERSION, MAX_PARALLEL_WORKERS, MIN_PARALLEL_WORKERS,
 )
@@ -55,9 +55,13 @@ def version():
 
 
 def _match_warnings(match) -> list[str]:
-    """Why a pair needs a look: another language in the name, a season only
-    assumed, a partial track."""
-    return [text for text in (match.language_warning, match.note) if text]
+    """Why a pair needs a look: an unrelated-looking title (LOW confidence),
+    another language in the name, a season only assumed, a partial track."""
+    warnings = []
+    if match.subtitle is not None and match.confidence == MatchConfidence.LOW:
+        warnings.append(f"the titles look different (title match {match.score:.0f}%); "
+                        "make sure the subtitle is for this show")
+    return warnings + [text for text in (match.language_warning, match.note) if text]
 
 
 def _echo_pairs_to_check(matches) -> None:
@@ -112,6 +116,7 @@ def scan(folder):
             safe_echo(f"\n  {click.style(f'[!] {len(result.unmatched_videos)} unmatched video(s)', fg='yellow')}")
         if result.unmatched_subtitles:
             safe_echo(f"  {click.style(f'[!] {len(result.unmatched_subtitles)} unmatched subtitle(s)', fg='yellow')}")
+        _echo_pairs_to_check(result.matches)
 
     except Exception as e:
         safe_echo(click.style(f"[ERROR] {e}", fg='red'))

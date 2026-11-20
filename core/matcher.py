@@ -1,4 +1,5 @@
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -349,7 +350,11 @@ def scan_folder(folder_path: Path) -> tuple[list[EpisodeInfo], list[EpisodeInfo]
 
 
 def _normalize_title(title: Optional[str]) -> str:
-    return " ".join(re.sub(r'[\W_]+', ' ', (title or "").lower()).split())
+    """Lower case, punctuation gone, and without a 19xx/20xx year ('Show 2023' and
+    'Show (2023)' are the same title), unless the year is the whole title."""
+    text = " ".join(re.sub(r'[\W_]+', ' ', (title or "").lower()).split())
+    without_year = " ".join(_YEAR.sub(' ', text).split())
+    return without_year or text
 
 
 def _comparable_stem(info: EpisodeInfo) -> str:
@@ -431,10 +436,14 @@ def numberless_title(info: EpisodeInfo, strip_language: Optional[bool] = None) -
     stem = re.sub(r'\[.*?\]|\(.*?\)', ' ', stem).lower()
     stem = re.sub(r'[\W_]+', ' ', stem)
     stem = _RELEASE_TAGS.sub(' ', stem)
-    # Years go too ('Suzume 2022'), unless the year is the whole title ('1917')
+    # Years go too ('Suzume 2022'), unless the year is the whole title ('1917').
+    # Only years left ('2012.2009.1080p...'): the first is the title, the next
+    # the release year.
     without_year = _YEAR.sub(' ', stem)
     if without_year.strip():
         stem = without_year
+    elif stem.split():
+        stem = stem.split()[0]
     return " ".join(stem.split())
 
 
@@ -509,21 +518,56 @@ _PARTIAL_WORDS = frozenset({
 _TOKEN = re.compile(r'[^\W_]+(?:\s*&\s*[^\W_]+)*')
 
 
-def _tokens(text: str) -> set[str]:
-    """Lower-case words of a name; 'Signs & Songs' gives 'signs&songs', 'signs', 'songs'."""
-    words = set()
+def _token_list(text: str) -> list[str]:
+    """Lower-case words of a name, repeats kept; 'Signs & Songs' gives
+    'signs&songs', 'signs', 'songs'."""
+    words = []
     for token in _TOKEN.findall(text.lower()):
         token = re.sub(r'\s+', '', token)
-        words.add(token)
+        words.append(token)
         if "&" in token:
-            words.update(part for part in token.split("&") if part)
+            words.extend(part for part in token.split("&") if part)
+    return words
+
+
+def _tokens(text: str) -> set[str]:
+    return set(_token_list(text))
+
+
+def _without_group_tag(stem: str) -> str:
+    """The name without its leading '[Group]' tag ('[Old Group] Show - 03')."""
+    rest = stem.lstrip()
+    first = _BRACKET.match(rest)
+    return rest[first.end():] if first else rest
+
+
+def _tail_words(stem: str, episode_num: Optional[str]) -> set[str]:
+    """Words where a track description goes: inside a bracket (the leading group
+    tag already removed) and after the episode number."""
+    words = set()
+    for bracket in _BRACKET.finditer(stem):
+        words |= _tokens(bracket.group(1))
+    plain = _BRACKET.sub(" ", stem)
+    if episode_num and episode_num.isdigit():
+        hits = list(re.finditer(rf'(?<!\d)0*{int(episode_num)}(?!\d)', plain))
+        if hits:
+            words |= _tokens(plain[hits[-1].end():])
     return words
 
 
 def _partial_words(video: EpisodeInfo, subtitle: EpisodeInfo) -> list[str]:
-    """The partial-track words in the subtitle's name that the video's name does
-    not share (a title such as 'Old Boy' is in both names and does not count)."""
-    found = (_tokens(_comparable_stem(subtitle)) - _tokens(video.filepath.stem)) & _PARTIAL_WORDS
+    """The partial-track words that describe the subtitle and not the video. A
+    word counts when the subtitle's name has it more often than the video's
+    ('Signs of Love - 05 [Signs].ass' for 'Signs of Love - 05.mkv'), or has it in
+    a bracket / after the episode number where the video's name does not. A
+    title such as 'Old Boy' and the leading group tag ('[Old Group]') do not count."""
+    sub_stem = _without_group_tag(_comparable_stem(subtitle))
+    vid_stem = _without_group_tag(video.filepath.stem.lower())
+    sub_words, vid_words = Counter(_token_list(sub_stem)), Counter(_token_list(vid_stem))
+    found = {word for word in sub_words if word in _PARTIAL_WORDS
+             and sub_words[word] > vid_words[word]}
+    found |= ((_tail_words(sub_stem, subtitle.episode_num)
+               - _tail_words(vid_stem, video.episode_num)) & _PARTIAL_WORDS)
     return sorted(found)
 
 
@@ -557,11 +601,26 @@ def _name_fit(video: EpisodeInfo, subtitle: EpisodeInfo) -> int:
 
 
 # 'Detective Conan Movie 26', 'Film 3', 'Gekijouban ...': a film of a series
-_FILM_MARKER = re.compile(r'(?<![a-z])(?:movie|film|gekij[oō]u?ban)(?![a-z])|劇場版', re.IGNORECASE)
+_FILM_PREFIX = re.compile(r'(?<![a-z])gekij[oō]u?ban(?![a-z])|劇場版', re.IGNORECASE)
+_FILM_WORD = re.compile(r'(?<![a-z])(?:movie|film)(?![a-z])', re.IGNORECASE)
 
 
 def _is_film_marked(info: EpisodeInfo) -> bool:
-    return bool(_FILM_MARKER.search(_comparable_stem(info)))
+    """'Gekijouban' / '劇場版' anywhere; 'Movie' / 'Film' only followed by a number
+    ('Movie 3', 'Film 2') or at the end of the title ('Show the Movie [1080p]'),
+    never inside a title ('Film Club - 03', 'Movie Maker - 01')."""
+    stem = _comparable_stem(info)
+    if _is_subtitle(info):
+        stem = _strip_language_suffix(stem)
+    if _FILM_PREFIX.search(stem):
+        return True
+    for word in _FILM_WORD.finditer(stem):
+        rest = re.sub(r'\[.*?\]|\(.*?\)', ' ', stem[word.end():])
+        rest = _RELEASE_TAGS.sub(' ', " ".join(re.sub(r'[\W_]+', ' ', rest).split()))
+        rest = rest.strip()
+        if not rest or rest[0].isdigit():
+            return True
+    return False
 
 
 _CONFIDENCE_ORDER = (MatchConfidence.EXACT, MatchConfidence.HIGH, MatchConfidence.MEDIUM,
@@ -602,15 +661,17 @@ def match_files(videos: list[EpisodeInfo], subtitles: list[EpisodeInfo],
     first, whatever the order of the files: '5 Centimeters per Second.mkv' (read
     as episode 5) never takes 'Show - 05.srt' from 'Show - 05.mkv'. Ranking, best
     first:
-      1. a video without a stray marker word;
-      2. the same season (a name without a season counts as season 1, so
+      1. the same season (a name without a season counts as season 1, so
          'Show - 01' prefers 'Show - 01.srt' over 'Show S2 - 01.srt');
-      3. a title score of at least 50 (an unrelated show never beats the right one);
+      2. a title score of at least 50 (an unrelated show never beats the right one);
+      3. a video without a stray marker word ('Show - 01 [Preview v2].mkv' loses
+         the subtitle to 'Show - 01.mkv', but 'Special A - 03.mkv' keeps its own);
       4. a subtitle not tagged with another language than `subtitle_language`;
       5. a full track over a partial one (signs, songs, forced, karaoke,
          commentary, SDH, CC, alt, old, copy, preview);
-      6. the title-score band; tagged with the wanted language over untagged;
-         the exact score;
+      6. tagged with the wanted language over untagged (so with a score of at
+         least 50, 'Dan Da Dan - 05.ar.srt' beats 'Dandadan - 05.srt'); the
+         title-score band; the exact score;
       7. the name fit (named exactly like the video best);
       8. the release version; a synced copy;
       9. finally the file names, so the result never depends on the file order.
@@ -631,6 +692,7 @@ def match_files(videos: list[EpisodeInfo], subtitles: list[EpisodeInfo],
         key = _match_key(vid)
         if key is None:
             continue
+        # Below the title score: 'Special A - 03.mkv' keeps 'Special A - 03.srt'
         plain = not _has_marker_word(vid.filepath.stem)
         for sub, tag in by_key.get(key, []):
             if vid.season is not None and sub.season is not None and vid.season != sub.season:
@@ -643,8 +705,9 @@ def match_files(videos: list[EpisodeInfo], subtitles: list[EpisodeInfo],
             # A missing season is a wildcard, but only as a last resort
             season_fit = (vid.season or 1) == (sub.season or 1)
             partial = _partial_words(vid, sub)
-            order = (plain, season_fit, score >= 50, rank > 0, not partial, _score_tier(score),
-                     rank, score, _name_fit(vid, sub), sub.version, is_synced_copy(sub.filepath))
+            order = (season_fit, score >= 50, plain, rank > 0, not partial, rank,
+                     _score_tier(score), score, _name_fit(vid, sub), sub.version,
+                     is_synced_copy(sub.filepath))
             pairs.append((order, index, sub, tag, score, season_fit, partial))
     # Deterministic: between equal pairs the names decide, never the input order
     # (list.sort is stable, also with reverse=True)
