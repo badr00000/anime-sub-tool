@@ -10,7 +10,6 @@ from core.constants import MAX_OFFSET_MS, MAX_PARALLEL_WORKERS, MIN_PARALLEL_WOR
 from core.languages import name_of
 from core.models import AppConfig, ProcessingOptions
 from core.subtitles import CHARSET_CHOICES
-from gui.theme import Colors
 from gui.widgets.language_picker import LanguageCombo, MultiLanguageCombo
 
 
@@ -53,12 +52,12 @@ class OptionsPanel(QWidget):
         content_widget.setStyleSheet("#optionsContent { background: transparent; }")
 
         scroll_layout = QVBoxLayout(content_widget)
-        scroll_layout.setContentsMargins(0, 0, 8, 0)
-        scroll_layout.setSpacing(4)
+        scroll_layout.setContentsMargins(0, 0, 16, 0)
+        scroll_layout.setSpacing(0)
 
 
         # --- Presets Group ---
-        preset_group = QGroupBox("PRESET")
+        preset_group = QGroupBox("Preset")
         preset_layout = QHBoxLayout(preset_group)
 
         self.preset_combo = QComboBox()
@@ -69,10 +68,10 @@ class OptionsPanel(QWidget):
 
         self.preset_combo.currentTextChanged.connect(self._load_preset)
 
-        save_preset_btn = QPushButton("SAVE")
+        save_preset_btn = QPushButton("Save")
         save_preset_btn.clicked.connect(self._save_preset)
 
-        del_preset_btn = QPushButton("DEL")
+        del_preset_btn = QPushButton("Delete")
         del_preset_btn.clicked.connect(self._delete_preset)
 
         preset_layout.addWidget(self.preset_combo, 1)
@@ -80,27 +79,27 @@ class OptionsPanel(QWidget):
         preset_layout.addWidget(del_preset_btn)
 
         # --- Filters Group ---
-        filter_group = QGroupBox("TRACK FILTERS")
+        filter_group = QGroupBox("Tracks to keep")
         filter_layout = QVBoxLayout(filter_group)
 
         self.audio_input = MultiLanguageCombo("All audio tracks (nothing ticked)")
         self.audio_input.set_values(["jpn"])
-        filter_layout.addWidget(self._field("KEEP AUDIO", self.audio_input))
+        filter_layout.addWidget(self._field("Audio languages", self.audio_input))
 
         # Original subtitles inside the episode: remove them (default) or keep them all
-        self.remove_subs_cb = QCheckBox("Remove existing subtitles from the episode")
+        self.remove_subs_cb = QCheckBox("Remove the subtitles already inside")
         self.remove_subs_cb.setChecked(True)
         self.remove_subs_cb.setToolTip("Unticked: every subtitle already in the episode is kept,\n"
                                        "and the new subtitle is added next to them.")
-        self.sub_input = MultiLanguageCombo("No exceptions — remove them all")
-        self._sub_except_field = self._field("EXCEPT THESE LANGUAGES", self.sub_input)
+        self.sub_input = MultiLanguageCombo("None, remove them all")
+        self._sub_except_field = self._field("Except these languages", self.sub_input)
         self.remove_subs_cb.toggled.connect(self._sub_except_field.setEnabled)
         filter_layout.addSpacing(4)
         filter_layout.addWidget(self.remove_subs_cb)
         filter_layout.addWidget(self._sub_except_field)
 
         # --- New Subtitle Group (timing + encoding) ---
-        subtitle_group = QGroupBox("NEW SUBTITLE")
+        subtitle_group = QGroupBox("New subtitle")
         subtitle_layout = QVBoxLayout(subtitle_group)
 
         self.offset_spin = QDoubleSpinBox()
@@ -127,31 +126,31 @@ class OptionsPanel(QWidget):
         self.sub_name_edit.setPlaceholderText("Name shown in the player")
         _follow_language(self.sub_lang_combo, self.sub_name_edit)
 
-        subtitle_layout.addWidget(self._field("LANGUAGE", self.sub_lang_combo))
-        subtitle_layout.addWidget(self._field("TRACK NAME", self.sub_name_edit))
-        subtitle_layout.addWidget(self._field("SHIFT TIMING   ( + LATER / − EARLIER )", self.offset_spin))
-        subtitle_layout.addWidget(self._field("ENCODING", self.charset_combo))
+        subtitle_layout.addWidget(self._field("Language", self.sub_lang_combo))
+        subtitle_layout.addWidget(self._field("Track name", self.sub_name_edit))
+        subtitle_layout.addWidget(self._field("Timing shift (positive shows later)", self.offset_spin))
+        subtitle_layout.addWidget(self._field("Encoding", self.charset_combo))
 
         # --- Track Metadata Editor Group ---
-        editor_group = QGroupBox("FIX EXISTING TRACK")
+        editor_group = QGroupBox("Fix an existing track")
         editor_layout = QVBoxLayout(editor_group)
 
-        self.edit_target = LanguageCombo(empty_label="Off — don't change any track",
+        self.edit_target = LanguageCombo(empty_label="Off",
                                          include_undetermined=True)
         self.edit_new_lang = LanguageCombo()
         self.edit_new_lang.set_value("ara")
         self.edit_new_name = QLineEdit("Arabic")
         _follow_language(self.edit_new_lang, self.edit_new_name)
-        editor_layout.addWidget(self._field("TRACK LANGUAGE TO FIX", self.edit_target))
-        editor_layout.addWidget(self._field("CHANGE IT TO", self.edit_new_lang))
-        editor_layout.addWidget(self._field("NEW TRACK NAME", self.edit_new_name))
+        editor_layout.addWidget(self._field("Track language to fix", self.edit_target))
+        editor_layout.addWidget(self._field("Change it to", self.edit_new_lang))
+        editor_layout.addWidget(self._field("New track name", self.edit_new_name))
 
         self.isolate_track_cb = QCheckBox("Remove all other original subtitles")
         self.isolate_track_cb.setChecked(False)
         editor_layout.addWidget(self.isolate_track_cb)
 
         # --- General Group ---
-        general_group = QGroupBox("OUTPUT")
+        general_group = QGroupBox("Output")
         general_layout = QVBoxLayout(general_group)
 
         self.subfolder_cb = QCheckBox()
@@ -167,7 +166,7 @@ class OptionsPanel(QWidget):
                                      "Ticked: they are still cleaned (audio / subtitle filters), "
                                      "with no subtitle added.")
 
-        self.dry_run_cb = QCheckBox("Dry run (simulate, write nothing)")
+        self.dry_run_cb = QCheckBox("Dry run, write nothing")
 
         self.worker_spin = QSpinBox()
         self.worker_spin.setRange(MIN_PARALLEL_WORKERS, MAX_PARALLEL_WORKERS)
@@ -178,7 +177,7 @@ class OptionsPanel(QWidget):
         general_layout.addWidget(self.overwrite_cb)
         general_layout.addWidget(self.unmatched_cb)
         general_layout.addWidget(self.dry_run_cb)
-        general_layout.addWidget(self._field("EPISODES AT ONCE", self.worker_spin))
+        general_layout.addWidget(self._field("Episodes at once", self.worker_spin))
 
         scroll_layout.addWidget(preset_group)
         scroll_layout.addWidget(filter_group)
@@ -195,11 +194,10 @@ class OptionsPanel(QWidget):
         """A small caption above an input, so fields fit a narrow column."""
         box = QWidget()
         lay = QVBoxLayout(box)
-        lay.setContentsMargins(0, 2, 0, 2)
+        lay.setContentsMargins(0, 4, 0, 4)
         lay.setSpacing(4)
         cap = QLabel(label)
         cap.setProperty("role", "fieldLabel")
-        cap.setStyleSheet(f"color: {Colors.text_muted}; font-size: 10px;")
         lay.addWidget(cap)
         lay.addWidget(widget)
         return box

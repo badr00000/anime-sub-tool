@@ -371,9 +371,9 @@ def row_texts(panel, row):
 def test_pick_another_subtitle_none_and_move(window, season):
     panel = scanned(window, season)
     table = panel.table
-    assert row_texts(panel, 2)[2].startswith("— No match —") and row_texts(panel, 2)[4] == "NO SUB"
-    assert "1 WITHOUT SUBTITLE" in panel.summary_label.text()
-    assert "1 SUBTITLE(S) UNUSED" in panel.summary_label.text()
+    assert row_texts(panel, 2)[2].startswith("No match") and row_texts(panel, 2)[4] == "No subtitle"
+    assert "1 without a subtitle" in panel.summary_label.text()
+    assert "1 unused subtitle" in panel.summary_label.text()
     # only the subtitle cells are editable, and they say how
     assert table.item(0, 2).flags() & Qt.ItemFlag.ItemIsEditable
     assert not table.item(0, 1).flags() & Qt.ItemFlag.ItemIsEditable
@@ -384,18 +384,18 @@ def test_pick_another_subtitle_none_and_move(window, season):
     panel.choose_subtitle(2, sub_named(panel, "Extra subs.srt"))
     m = panel.scan_result.matches[2]
     assert m.subtitle.filename == "Extra subs.srt" and m.confidence == MatchConfidence.MANUAL
-    assert row_texts(panel, 2)[3] == "MANUAL" and row_texts(panel, 2)[4] == "READY"
-    assert "WITHOUT SUBTITLE" not in panel.summary_label.text()
-    assert "UNUSED" not in panel.summary_label.text()
-    assert "1 PAIRED BY HAND" in panel.summary_label.text()
+    assert row_texts(panel, 2)[3] == "Manual" and row_texts(panel, 2)[4] == "Ready"
+    assert "without a subtitle" not in panel.summary_label.text()
+    assert "unused" not in panel.summary_label.text()
+    assert "1 paired by hand" in panel.summary_label.text()
     assert window.scan_result.unmatched_videos == []
 
     # 2) none for episode 1
     panel.choose_subtitle(0, None)
     assert panel.scan_result.matches[0].subtitle is None
-    assert row_texts(panel, 0)[4] == "NO SUB" and "none" in row_texts(panel, 0)[2]
-    assert "1 WITHOUT SUBTITLE" in panel.summary_label.text()
-    assert "1 SUBTITLE(S) UNUSED" in panel.summary_label.text()          # Show - 01.srt
+    assert row_texts(panel, 0)[4] == "No subtitle" and "None" in row_texts(panel, 0)[2]
+    assert "1 without a subtitle" in panel.summary_label.text()
+    assert "1 unused subtitle" in panel.summary_label.text()          # Show - 01.srt
     assert [s.filename for s in window.scan_result.unmatched_subtitles] == ["Show - 01.srt"]
 
     # 3) move: episode 1 takes episode 2's subtitle; episode 2 is left without
@@ -406,13 +406,13 @@ def test_pick_another_subtitle_none_and_move(window, season):
     assert matches[0].subtitle.filename == "Show - 02.srt"
     # R5-08: the emptied row is a normal NO SUB row, not one chosen by hand
     assert matches[1].subtitle is None and not matches[1].is_manual and matches[1].moved_to == "1"
-    assert row_texts(panel, 1)[4] == "NO SUB"
-    assert row_texts(panel, 1)[2].startswith("— none (moved to EP 1) —")
+    assert row_texts(panel, 1)[4] == "No subtitle"
+    assert row_texts(panel, 1)[2].startswith("None, moved to episode 1")
     assert "moved from episode 2" in messages[-1]
     used = [m.subtitle.filepath for m in matches if m.subtitle]
     assert len(used) == len(set(used))                                     # one row per subtitle
-    assert "1 WITHOUT SUBTITLE" in panel.summary_label.text()
-    assert "1 SUBTITLE(S) UNUSED" in panel.summary_label.text()
+    assert "1 without a subtitle" in panel.summary_label.text()
+    assert "1 unused subtitle" in panel.summary_label.text()
 
 
 def test_processing_uses_the_edited_pairs(window, season, monkeypatch):
@@ -442,13 +442,13 @@ def test_picker_dropdown_and_keyboard(window, season):
     index = table.model().index(2, 2)
     editor = delegate.createEditor(table.viewport(), None, index)
     labels = [editor.itemText(i) for i in range(editor.count())]
-    assert labels[0] == "— none —"
-    assert any(label.startswith("Show - 01.srt") and "now on EP 1" in label for label in labels)
+    assert labels[0] == "None"
+    assert any(label.startswith("Show - 01.srt") and "on episode 1" in label for label in labels)
     assert "Extra subs.srt" in labels and editor.currentIndex() == 0      # episode 3 has none
     editor.setCurrentIndex(labels.index("Extra subs.srt"))
     delegate.setModelData(editor, table.model(), index)
     assert panel.scan_result.matches[2].subtitle.filename == "Extra subs.srt"
-    assert row_texts(panel, 2)[3] == "MANUAL"
+    assert row_texts(panel, 2)[3] == "Manual"
     editor.deleteLater()
 
     editor = delegate.createEditor(table.viewport(), None, table.model().index(0, 2))
@@ -479,14 +479,14 @@ def test_language_change_rematches_but_keeps_manual_choices_and_rescan_resets(wi
     assert [m.subtitle.filename for m in panel.scan_result.matches] == ["Show - 01.ar.srt", "Show - 02.ar.srt"]
     assert "Arabic (ara)" in panel.table.item(0, 2).toolTip()
     panel.choose_subtitle(1, sub_named(panel, "Show - 02.en.srt"))          # by hand
-    assert panel.table.item(1, 4).text() == "⚠ CHECK"
+    assert panel.table.item(1, 4).text() == "Check"
     assert "subtitle looks like English, track will be labelled Arabic" in panel.table.item(1, 4).toolTip()
 
     window.options_panel.sub_lang_combo.set_value("eng")                    # signal -> rematch
     matches = panel.scan_result.matches
     assert matches[0].subtitle.filename == "Show - 01.en.srt"               # re-matched
     assert matches[1].subtitle.filename == "Show - 02.en.srt" and matches[1].is_manual
-    assert panel.table.item(1, 4).text() == "READY"
+    assert panel.table.item(1, 4).text() == "Ready"
     assert window.options_panel.get_options().subtitle_language == "eng"
 
     window._run_scan()                                                       # rescan: reset
@@ -500,7 +500,7 @@ def test_preview_flags_a_subtitle_in_another_language(window, tmp_path):
     write_srt(tmp_path / "Show - 01 [ENG].srt")
     window.options_panel.sub_lang_combo.set_value("ara")
     panel = scanned(window, tmp_path)
-    assert panel.table.item(0, 4).text() == "⚠ CHECK"
+    assert panel.table.item(0, 4).text() == "Check"
     assert "track will be labelled Arabic" in panel.table.item(0, 4).toolTip()
     assert "English (eng)" in panel.table.item(0, 2).toolTip()
-    assert "1 TO CHECK" in panel.summary_label.text()
+    assert "1 to check" in panel.summary_label.text()

@@ -8,15 +8,15 @@ from core.constants import LOG_MAX_LINES
 from gui.theme import Colors
 
 LEVEL_STYLE = {
-    "INFO": ("INF", Colors.text_secondary),
-    "SUCCESS": ("OK ", Colors.blue_bright),
-    "WARNING": ("WRN", Colors.amber),
-    "ERROR": ("ERR", Colors.red),
+    "INFO": ("info", Colors.text_secondary),
+    "SUCCESS": ("done", Colors.text),
+    "WARNING": ("warn", Colors.warning),
+    "ERROR": ("error", Colors.negative),
 }
 
 
 class LogPanel(QWidget):
-    """Terminal-style log: time, level tag, message."""
+    """The batch log: time, level, message."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -24,20 +24,20 @@ class LogPanel(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(8)
 
         controls = QHBoxLayout()
-        title = QLabel("// LOG")
-        title.setProperty("role", "fieldLabel")
+        title = QLabel("Log")
+        title.setProperty("role", "sectionLabel")
         self.autoscroll_cb = QCheckBox("Auto-scroll")
         self.autoscroll_cb.setChecked(True)
-        self.clear_btn = QPushButton("CLEAR")
+        self.clear_btn = QPushButton("Clear")
         self.clear_btn.clicked.connect(self.clear)
-        self.copy_btn = QPushButton("COPY")
+        self.copy_btn = QPushButton("Copy")
         self.copy_btn.clicked.connect(self.copy_all)
         for b in (self.clear_btn, self.copy_btn):
-            b.setFixedHeight(28)
-            b.setStyleSheet("padding: 2px 12px; font-size: 11px;")
+            b.setObjectName("ghostButton")
+            b.setFixedHeight(32)
 
         controls.addWidget(title)
         controls.addStretch()
@@ -58,7 +58,7 @@ class LogPanel(QWidget):
         stamp = time.strftime("%H:%M:%S")
         self.text_edit.append(
             f'<span style="color:{Colors.text_muted}">{stamp}</span>&nbsp;&nbsp;'
-            f'<span style="color:{color}; font-weight:700">[{tag}]</span>&nbsp;&nbsp;'
+            f'<span style="color:{Colors.text_muted}">{tag.ljust(5).replace(" ", "&nbsp;")}</span>&nbsp;'
             f'<span style="color:{color}">{html.escape(message)}</span>'
         )
         if self.autoscroll_cb.isChecked():

@@ -9,8 +9,8 @@ The video and the original subtitle are never modified.
 from bisect import bisect_right
 from pathlib import Path
 
-from PySide6.QtCore import QRectF, QSizeF, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut, QTextOption
+from PySide6.QtCore import QPointF, QRectF, QSize, QSizeF, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPen, QShortcut, QTextOption
 from PySide6.QtMultimedia import QAudioOutput, QMediaMetaData, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
@@ -25,7 +25,8 @@ from core.subtitles import (
     CHARSET_AUTO, CHARSET_CHOICES, ENCODING_UNCERTAIN, UNCERTAIN_HINT, describe_encoding,
 )
 from gui.dialogs import messages
-from gui.theme import Colors, add_glow, page_header, plain_tooltip
+from gui.icons import icon
+from gui.theme import Colors, page_header, plain_tooltip
 
 VIDEO_EXTS = VIDEO_EXTENSIONS
 SUB_EXTS = sf.SUPPORTED_EXTENSIONS
@@ -33,11 +34,93 @@ STEP_SMALL = 50       # G / H, same as VLC
 SEEK_STEP = 5000      # ← / →
 
 
+def _keys_text() -> str:
+    """Keyboard shortcuts as small keycaps."""
+    cap = (f"<span style='font-family: Consolas; color: {Colors.text_secondary};"
+           f" background: {Colors.raised};'>&nbsp;{{}}&nbsp;</span>")
+    return (f"{cap.format('G')} earlier &nbsp; {cap.format('H')} later<br>"
+            f"{cap.format('Space')} play &nbsp; {cap.format('←')} {cap.format('→')} 5 s")
+
+
 def _clock(ms: int) -> str:
     s = max(0, int(ms)) // 1000
     h, rem = divmod(s, 3600)
     m, s = divmod(rem, 60)
     return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
+
+class CueTimeline(QWidget):
+    """A window of the episode around the playhead: where each subtitle line sits.
+
+    Faint outlines are the lines at their original time, filled blocks are where
+    they land with the current offset, so the shift is visible as it happens.
+    """
+
+    WINDOW_MS = 12_000
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(64)
+        self._cues: list = []
+        self._offset = 0
+        self._pos = 0
+
+    def set_state(self, cues, offset_ms: int, position_ms: int):
+        if (cues is self._cues and offset_ms == self._offset and position_ms == self._pos):
+            return
+        self._cues, self._offset, self._pos = cues, offset_ms, position_ms
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        p.setPen(QPen(QColor(Colors.hairline), 1))
+        p.setBrush(QColor(Colors.surface))
+        p.drawRoundedRect(QRectF(0.5, 0.5, w - 1, h - 1), 10, 10)
+
+        start = self._pos - self.WINDOW_MS // 2
+        scale = w / self.WINDOW_MS
+        x_of = lambda ms: (ms - start) * scale
+
+        # One tick per second, a time label every two seconds
+        font = QFont("Consolas")
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        font.setPixelSize(10)
+        p.setFont(font)
+        first = (start // 1000 + 1) * 1000
+        for ms in range(first, start + self.WINDOW_MS, 1000):
+            if ms < 0:
+                continue
+            x = x_of(ms)
+            p.setPen(QPen(QColor(Colors.hairline_strong), 1))
+            p.drawLine(QPointF(x, h - 14), QPointF(x, h - 10))
+            if (ms // 1000) % 2 == 0:
+                p.setPen(QColor(Colors.text_muted))
+                p.drawText(QRectF(x - 30, h - 12, 60, 12), Qt.AlignmentFlag.AlignCenter, _clock(ms))
+
+        lane = QRectF(0, 12, w, 22)
+        for cue in self._cues:
+            if cue.end_ms + abs(self._offset) < start or cue.start_ms - abs(self._offset) > start + self.WINDOW_MS:
+                continue
+            original = QRectF(x_of(cue.start_ms), lane.y(), max(2.0, (cue.end_ms - cue.start_ms) * scale),
+                              lane.height())
+            shifted = original.translated(self._offset * scale, 0)
+            if self._offset:
+                pen = QPen(QColor(Colors.hairline_strong), 1)
+                pen.setDashPattern([3, 3])
+                p.setPen(pen)
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRoundedRect(original, 5, 5)
+            p.setPen(QPen(QColor(Colors.accent), 1))
+            p.setBrush(QColor(Colors.accent_soft))
+            p.drawRoundedRect(shifted, 5, 5)
+
+        # Playhead
+        x = x_of(self._pos)
+        p.setPen(QPen(QColor(Colors.text), 1.5))
+        p.drawLine(QPointF(x, 6), QPointF(x, h - 16))
+        p.end()
 
 
 class VideoView(QGraphicsView):
@@ -73,7 +156,7 @@ class VideoView(QGraphicsView):
         self.scene().addItem(self._message)
 
         self._text = ""
-        self.set_message("DROP AN EPISODE AND A SUBTITLE FILE HERE")
+        self.set_message("Drop an episode and its subtitle here")
 
     def set_message(self, text: str):
         self._message.setPlainText(text)
@@ -97,9 +180,8 @@ class VideoView(QGraphicsView):
         self.video_item.setSize(QSizeF(w, h))
         self.video_item.setPos(0, 0)
 
-        mf = QFont("Segoe UI", 11)
-        mf.setBold(True)
-        mf.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2)
+        mf = QFont("Segoe UI")
+        mf.setPixelSize(14)
         self._message.setFont(mf)
         br = self._message.boundingRect()
         self._message.setPos((w - br.width()) / 2, (h - br.height()) / 2)
@@ -111,7 +193,7 @@ class VideoView(QGraphicsView):
             return
         f = QFont("Segoe UI", 10)
         f.setPixelSize(max(14, int(h * 0.05)))
-        f.setBold(True)
+        f.setWeight(QFont.Weight.DemiBold)
         self._sub.setFont(f)
         self._sub.setTextWidth(w * 0.86)
         br = self._sub.boundingRect()
@@ -122,7 +204,7 @@ class VideoView(QGraphicsView):
 
 
 class FileField(QWidget):
-    """Caption + read-only path + BROWSE."""
+    """Caption + read-only path + Browse."""
 
     browse_clicked = Signal()
 
@@ -138,8 +220,8 @@ class FileField(QWidget):
         self.edit = QLineEdit()
         self.edit.setReadOnly(True)
         self.edit.setPlaceholderText(placeholder)
-        btn = QPushButton("BROWSE")
-        btn.setFixedWidth(96)
+        btn = QPushButton("Browse")
+        btn.setFixedHeight(36)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.clicked.connect(self.browse_clicked.emit)
         row.addWidget(self.edit, 1)
@@ -182,36 +264,39 @@ class SyncPage(QWidget):
         # ── layout ──
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(14)
+        root.setSpacing(20)
         root.addWidget(page_header(
-            "SYNC SUBTITLE",
-            "Watch the episode, nudge the subtitle until it matches the voice, then save a synced copy.",
-            Colors.red))
+            "Sync a subtitle",
+            "Play the episode, move the subtitle until it matches the voice, then save a synced copy."))
 
         files = QHBoxLayout()
         files.setSpacing(16)
-        self.video_field = FileField("EPISODE", "Pick or drop a video file…")
+        self.video_field = FileField("Episode", "Pick or drop a video file")
         self.video_field.browse_clicked.connect(self._browse_video)
-        self.sub_field = FileField("SUBTITLE", "Pick or drop a .srt / .ass file…")
+        self.sub_field = FileField("Subtitle", "Pick or drop a .srt or .ass file")
         self.sub_field.browse_clicked.connect(self._browse_subtitle)
         files.addWidget(self.video_field, 1)
         files.addWidget(self.sub_field, 1)
         root.addLayout(files)
 
         body = QHBoxLayout()
-        body.setSpacing(18)
+        body.setSpacing(20)
         root.addLayout(body, 1)
 
         # Left: video + transport
         left = QVBoxLayout()
-        left.setSpacing(8)
+        left.setSpacing(12)
         left.addWidget(self.view, 1)
+        self.timeline = CueTimeline()
+        left.addWidget(self.timeline)
 
         transport = QHBoxLayout()
-        transport.setSpacing(10)
-        self.play_btn = QPushButton("▶")
-        self.play_btn.setObjectName("primaryButton")
-        self.play_btn.setFixedSize(46, 34)
+        transport.setSpacing(12)
+        self.play_btn = QPushButton()
+        self.play_btn.setIcon(icon("play", Colors.text))
+        self.play_btn.setIconSize(QSize(16, 16))
+        self.play_btn.setToolTip("Play / pause (Space)")
+        self.play_btn.setFixedSize(36, 36)
         self.play_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.play_btn.clicked.connect(self.toggle_play)
         self.seek = QSlider(Qt.Orientation.Horizontal)
@@ -219,8 +304,7 @@ class SyncPage(QWidget):
         self.seek.sliderPressed.connect(lambda: setattr(self, "_seeking", True))
         self.seek.sliderReleased.connect(self._seek_released)
         self.time_lbl = QLabel("00:00 / 00:00")
-        self.time_lbl.setProperty("role", "fieldLabel")
-        self.time_lbl.setStyleSheet(f"color: {Colors.text_secondary};")
+        self.time_lbl.setProperty("role", "mono")
         self.audio_combo = QComboBox()
         self.audio_combo.setMinimumWidth(150)
         self.audio_combo.setToolTip("Audio track")
@@ -244,12 +328,11 @@ class SyncPage(QWidget):
         panel.setObjectName("card")
         panel.setFixedWidth(300)
         pl = QVBoxLayout(panel)
-        pl.setContentsMargins(18, 16, 18, 16)
-        pl.setSpacing(10)
+        pl.setContentsMargins(20, 20, 20, 20)
+        pl.setSpacing(8)
 
-        enc_cap = QLabel("SUBTITLE ENCODING")
+        enc_cap = QLabel("Subtitle encoding")
         enc_cap.setProperty("role", "fieldLabel")
-        enc_cap.setStyleSheet(f"color: {Colors.text_muted}; font-size: 10px;")
         self.encoding_combo = QComboBox()
         for label, value in CHARSET_CHOICES:
             self.encoding_combo.addItem(label, value)
@@ -257,30 +340,29 @@ class SyncPage(QWidget):
                                        "text shows up as garbage.")
         self.encoding_combo.currentIndexChanged.connect(self._on_encoding_chosen)
         # Shown when auto-detect could not tell the encoding of the loaded file
-        self.encoding_warn = QLabel(f"⚠ Subtitle {UNCERTAIN_HINT} above. The text may look "
+        self.encoding_warn = QLabel(f"Subtitle {UNCERTAIN_HINT} above. The text may look "
                                     "garbled, and it cannot be saved until you do.")
         self.encoding_warn.setTextFormat(Qt.TextFormat.PlainText)
-        self.encoding_warn.setProperty("role", "bad")
+        self.encoding_warn.setProperty("role", "warn")
         self.encoding_warn.setWordWrap(True)
         self.encoding_warn.hide()
 
-        cap = QLabel("SUBTITLE OFFSET")
+        cap = QLabel("Offset")
         cap.setProperty("role", "fieldLabel")
         self.offset_lbl = QLabel()
-        self.offset_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.offset_lbl.setStyleSheet(f"font-family: {Colors.font_mono}; font-size: 28px; font-weight: 500;"
+                                      f" color: {Colors.text}; background: transparent;")
         self.offset_hint = QLabel()
         self.offset_hint.setProperty("role", "hint")
-        self.offset_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         # Shown when the offset pushes lines before 0:00 (they cannot be saved as they are)
         self.clamp_lbl = QLabel("")
         self.clamp_lbl.setTextFormat(Qt.TextFormat.PlainText)
-        self.clamp_lbl.setProperty("role", "bad")
+        self.clamp_lbl.setProperty("role", "warn")
         self.clamp_lbl.setWordWrap(True)
-        self.clamp_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.clamp_lbl.hide()
 
         grid = QGridLayout()
-        grid.setSpacing(6)
+        grid.setSpacing(8)
         for col, (label, ms, tip) in enumerate([("−1s", -1000, "1 second earlier"),
                                                 ("−100", -100, "100 ms earlier"),
                                                 ("−50", -STEP_SMALL, "50 ms earlier  (G)")]):
@@ -290,9 +372,8 @@ class SyncPage(QWidget):
                                                 ("+1s", 1000, "1 second later")]):
             grid.addWidget(self._nudge(label, ms, tip), 1, col)
 
-        exact_cap = QLabel("EXACT VALUE (SECONDS)")
+        exact_cap = QLabel("Exact value")
         exact_cap.setProperty("role", "fieldLabel")
-        exact_cap.setStyleSheet(f"color: {Colors.text_muted}; font-size: 10px;")
         exact_row = QHBoxLayout()
         self.exact = QDoubleSpinBox()
         self.exact.setRange(-MAX_OFFSET_MS / 1000, MAX_OFFSET_MS / 1000)
@@ -300,15 +381,14 @@ class SyncPage(QWidget):
         self.exact.setSingleStep(0.05)
         self.exact.setSuffix(" s")
         self.exact.valueChanged.connect(lambda v: self.set_offset(round(v * 1000), from_spin=True))
-        reset = QPushButton("RESET")
-        reset.setFixedWidth(86)
+        reset = QPushButton("Reset")
+        reset.setObjectName("ghostButton")
         reset.clicked.connect(lambda: self.set_offset(0))
         exact_row.addWidget(self.exact, 1)
         exact_row.addWidget(reset)
 
-        line_cap = QLabel("ON SCREEN NOW")
+        line_cap = QLabel("On screen now")
         line_cap.setProperty("role", "fieldLabel")
-        line_cap.setStyleSheet(f"color: {Colors.text_muted}; font-size: 10px;")
         # Subtitle text comes straight from a file: plain text only, or markup in a
         # subtitle (e.g. an <img> pointing at a local file) would be rendered.
         self.line_lbl = QLabel("—")
@@ -316,21 +396,20 @@ class SyncPage(QWidget):
         self.line_lbl.setWordWrap(True)
         self.line_lbl.setMinimumHeight(44)
         self.line_lbl.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.line_lbl.setStyleSheet(f"color: {Colors.text}; background: {Colors.bg_input};"
-                                    f" border: 1px solid {Colors.border}; padding: 8px;")
+        self.line_lbl.setStyleSheet(f"color: {Colors.text}; background: {Colors.input};"
+                                    f" border: 1px solid {Colors.hairline}; border-radius: 8px; padding: 8px;")
 
-        keys = QLabel("G earlier · H later\nSPACE play/pause · ←/→ 5s")
-        keys.setProperty("role", "fieldLabel")
-        keys.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        keys.setStyleSheet(f"color: {Colors.text_muted}; font-size: 10px; letter-spacing: 1px;")
+        keys = QLabel(_keys_text())
+        keys.setTextFormat(Qt.TextFormat.RichText)
+        keys.setProperty("role", "hint")
 
-        self.save_btn = QPushButton("SAVE SYNCED COPY")
+        self.save_btn = QPushButton("Save synced copy")
         self.save_btn.setObjectName("primaryButton")
-        self.save_btn.setFixedHeight(46)
+        self.save_btn.setFixedHeight(40)
         self.save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.save_btn.clicked.connect(self.save)
-        add_glow(self.save_btn, Colors.blue, 24)
-        self.save_as_btn = QPushButton("SAVE AS…")
+        self.save_as_btn = QPushButton("Save as…")
+        self.save_as_btn.setFixedHeight(36)
         self.save_as_btn.clicked.connect(self.save_as)
         self.saved_lbl = QLabel("")
         self.saved_lbl.setTextFormat(Qt.TextFormat.PlainText)
@@ -340,18 +419,22 @@ class SyncPage(QWidget):
         pl.addWidget(enc_cap)
         pl.addWidget(self.encoding_combo)
         pl.addWidget(self.encoding_warn)
-        pl.addSpacing(6)
+        pl.addSpacing(12)
         pl.addWidget(cap)
         pl.addWidget(self.offset_lbl)
         pl.addWidget(self.offset_hint)
         pl.addWidget(self.clamp_lbl)
+        pl.addSpacing(4)
         pl.addLayout(grid)
+        pl.addSpacing(8)
         pl.addWidget(exact_cap)
         pl.addLayout(exact_row)
+        pl.addSpacing(8)
         pl.addWidget(line_cap)
         pl.addWidget(self.line_lbl)
         pl.addStretch(1)
         pl.addWidget(keys)
+        pl.addSpacing(8)
         pl.addWidget(self.save_btn)
         pl.addWidget(self.save_as_btn)
         pl.addWidget(self.saved_lbl)
@@ -392,12 +475,9 @@ class SyncPage(QWidget):
 
     def set_offset(self, ms: int, from_spin: bool = False):
         self._offset = int(ms)
-        color = Colors.blue_bright if ms > 0 else Colors.red_bright if ms < 0 else Colors.text
         self.offset_lbl.setText(sf.format_offset(self._offset))
-        self.offset_lbl.setStyleSheet(f"font-size: 30px; font-weight: 900; color: {color};"
-                                      " background: transparent;")
-        self.offset_hint.setText("subtitle shows LATER" if ms > 0 else
-                                 "subtitle shows EARLIER" if ms < 0 else "original timing")
+        self.offset_hint.setText("The subtitle shows later" if ms > 0 else
+                                 "The subtitle shows earlier" if ms < 0 else "Original timing")
         if not from_spin:
             self.exact.blockSignals(True)
             self.exact.setValue(self._offset / 1000)
@@ -413,7 +493,7 @@ class SyncPage(QWidget):
     def _update_clamp_warning(self):
         clamped = self.clamped_lines()
         if clamped:
-            self.clamp_lbl.setText(f"⚠ {clamped} line(s) would start before 0:00 and "
+            self.clamp_lbl.setText(f"{clamped} line(s) would start before 0:00 and "
                                    "will be squeezed to 0:00 in the saved file")
         self.clamp_lbl.setVisible(bool(clamped))
 
@@ -424,7 +504,7 @@ class SyncPage(QWidget):
         self.player.setSource(QUrl.fromLocalFile(str(p)))
         self.video_field.edit.setText(str(p))
         self.video_field.edit.setToolTip(plain_tooltip(str(p)))
-        self.view.set_message("LOADING…")
+        self.view.set_message("Loading…")
         if self._sub is None:
             self._auto_pick_subtitle(p)
         self._update_buttons()
@@ -548,7 +628,8 @@ class SyncPage(QWidget):
         self.seek.setRange(0, ms)
 
     def _on_state(self, state):
-        self.play_btn.setText("❚❚" if state == QMediaPlayer.PlaybackState.PlayingState else "▶")
+        playing = state == QMediaPlayer.PlaybackState.PlayingState
+        self.play_btn.setIcon(icon("pause" if playing else "play", Colors.text))
 
     def _on_media_status(self, status):
         if status in (QMediaPlayer.MediaStatus.LoadedMedia, QMediaPlayer.MediaStatus.BufferedMedia):
@@ -560,11 +641,11 @@ class SyncPage(QWidget):
                 self.player.play()
                 self.player.pause()  # show the first frame
         elif status == QMediaPlayer.MediaStatus.InvalidMedia:
-            self.view.set_message("THIS VIDEO CAN'T BE PLAYED HERE")
+            self.view.set_message("This video can't be played here")
 
     def _on_error(self, error, message: str):
         if error != QMediaPlayer.Error.NoError:
-            self.view.set_message("THIS VIDEO CAN'T BE PLAYED HERE\n(unsupported codec?)")
+            self.view.set_message("This video can't be played here. Its codec may not be supported")
             self.status_message.emit(f"Video error: {message}")
 
     def _fill_audio_tracks(self):
@@ -607,6 +688,7 @@ class SyncPage(QWidget):
             text = "\n".join(active)
         self.view.set_subtitle(text)
         self.line_lbl.setText(text or "—")
+        self.timeline.set_state(self._cues, self._offset, pos)
 
     # ── saving ──
     def save(self):
@@ -659,7 +741,7 @@ class SyncPage(QWidget):
             messages.error(self, "Save failed", f"Could not save the subtitle:\n\n{e}")
             return
         self._saved_offset = self._offset
-        self.saved_lbl.setText(f"✓ Saved {out.name}  ({sf.format_offset(self._offset)})")
+        self.saved_lbl.setText(f"Saved {out.name} ({sf.format_offset(self._offset)})")
         self.status_message.emit(f"Saved synced subtitle: {out}")
 
     def pause(self):

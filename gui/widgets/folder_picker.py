@@ -1,4 +1,4 @@
-"""Folder Picker — neon drop zone with a path field and browse button."""
+"""Folder Picker — a drop area with a path field and a browse button."""
 
 from pathlib import Path
 
@@ -9,7 +9,12 @@ from PySide6.QtWidgets import (
 )
 
 from core.matcher import list_media_files
+from gui.icons import pixmap
 from gui.theme import Colors
+
+
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}" + ("" if n == 1 else "s")
 
 
 class FolderPicker(QFrame):
@@ -24,81 +29,77 @@ class FolderPicker(QFrame):
         super().__init__(parent)
         self.setObjectName("folderPicker")
         self.setAcceptDrops(True)
-        self.setMinimumHeight(230)
+        self.setMinimumHeight(240)
         self._drag_active = False
         self._state = "idle"  # idle | ok | bad
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(36, 30, 36, 26)
-        layout.setSpacing(10)
+        layout.setContentsMargins(48, 32, 48, 32)
+        layout.setSpacing(8)
+        layout.addStretch(1)
 
-        self.icon = QLabel("⇣")
+        self.icon = QLabel()
+        self.icon.setPixmap(pixmap("folder", Colors.text_secondary, 28))
         self.icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.icon.setStyleSheet(f"font-size: 40px; color: {Colors.blue}; background: transparent;")
+        self.icon.setStyleSheet("background: transparent;")
 
-        self.headline = QLabel("DROP YOUR SEASON FOLDER HERE")
+        self.headline = QLabel("Drop a season folder here")
         self.headline.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.headline.setStyleSheet(f"font-size: 16px; font-weight: 800; letter-spacing: 3px;"
-                                    f" color: {Colors.text}; background: transparent;")
+        self.headline.setStyleSheet(f"font-size: 16px; font-weight: 500; color: {Colors.text};"
+                                    " background: transparent;")
 
-        hint = QLabel("Episodes (.mkv, .mp4, …) and subtitles (.srt / .ass, …) in the same folder")
+        hint = QLabel("Episodes (.mkv, .mp4) and their subtitles (.srt, .ass) in the same folder")
         hint.setProperty("role", "hint")
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         row = QHBoxLayout()
         row.setSpacing(8)
         self.path_edit = QLineEdit()
-        self.path_edit.setPlaceholderText("…or paste a folder path")
-        self.path_edit.setMinimumHeight(38)
+        self.path_edit.setPlaceholderText("Or paste a folder path")
+        self.path_edit.setMinimumHeight(36)
+        self.path_edit.setMaximumWidth(640)
         self.path_edit.textChanged.connect(self._on_text_changed)
 
-        self.browse_btn = QPushButton("BROWSE")
-        self.browse_btn.setFixedSize(110, 38)
+        self.browse_btn = QPushButton("Browse")
+        self.browse_btn.setFixedHeight(36)
         self.browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.browse_btn.clicked.connect(self._browse)
-        row.addWidget(self.path_edit, 1)
+        row.addStretch(1)
+        row.addWidget(self.path_edit, 4)
         row.addWidget(self.browse_btn)
+        row.addStretch(1)
 
         self.status_label = QLabel("")
         self.status_label.setTextFormat(Qt.TextFormat.PlainText)
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         layout.addWidget(self.icon)
+        layout.addSpacing(4)
         layout.addWidget(self.headline)
         layout.addWidget(hint)
-        layout.addSpacing(8)
+        layout.addSpacing(16)
         layout.addLayout(row)
         layout.addWidget(self.status_label)
+        layout.addStretch(1)
 
-    # ── Painting: dashed neon frame with corner brackets ──
+    # ── Painting: a surface with a soft dashed outline that lights up while dragging ──
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-
-        color = QColor(Colors.red if self._state == "bad" else Colors.blue)
-        fill = QColor(color)
-        fill.setAlpha(34 if self._drag_active else 14)
-        p.fillRect(r, fill)
-
-        dash = QPen(QColor(color.red(), color.green(), color.blue(), 200 if self._drag_active else 90), 1)
-        dash.setDashPattern([6, 5])
-        p.setPen(dash)
-        p.drawRect(r.adjusted(6, 6, -6, -6))
-
-        # Corner brackets
-        p.setPen(QPen(color, 2.5))
-        L = 22
-        for x, y, dx, dy in ((r.left(), r.top(), 1, 1), (r.right(), r.top(), -1, 1),
-                             (r.left(), r.bottom(), 1, -1), (r.right(), r.bottom(), -1, -1)):
-            p.drawLine(x, y, x + dx * L, y)
-            p.drawLine(x, y, x, y + dy * L)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setBrush(QColor(Colors.raised if self._drag_active else Colors.surface))
+        line = Colors.accent if self._drag_active else (
+            Colors.negative if self._state == "bad" else Colors.hairline_strong)
+        pen = QPen(QColor(line), 1)
+        pen.setDashPattern([4, 4])
+        p.setPen(pen)
+        p.drawRoundedRect(r, 12, 12)
         p.end()
 
     def _set_state(self, state: str, message: str = ""):
         self._state = state
         self.status_label.setText(message)
-        self.status_label.setProperty("role", {"ok": "ok", "bad": "bad"}.get(state, "hint"))
+        self.status_label.setProperty("role", {"ok": "fieldLabel", "bad": "bad"}.get(state, "hint"))
         self.path_edit.setProperty("state", state if state != "idle" else "")
         for w in (self.status_label, self.path_edit):
             w.style().unpolish(w)
@@ -115,9 +116,9 @@ class FolderPicker(QFrame):
         if path and path.is_dir():
             # Counted exactly the way the scan will see the folder
             videos, subs = list_media_files(path)
-            self._set_state("ok", f"▲ {len(videos)} EPISODE(S)   ·   {len(subs)} SUBTITLE(S) FOUND")
+            self._set_state("ok", f"{_count(len(videos), 'episode')} · {_count(len(subs), 'subtitle file')}")
         elif text.strip():
-            self._set_state("bad", "✕ FOLDER NOT FOUND")
+            self._set_state("bad", "Folder not found")
         else:
             self._set_state("idle")
         self.path_changed.emit(text)

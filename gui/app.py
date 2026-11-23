@@ -28,7 +28,8 @@ from core.models import AppConfig
 from gui.dialogs import messages
 from gui.dialogs.about_dialog import AboutDialog
 from gui.dialogs.settings_dialog import SettingsDialog
-from gui.theme import Colors, add_glow, apply_palette, get_stylesheet, page_header
+from gui.icons import icon
+from gui.theme import Colors, apply_palette, get_stylesheet, page_header
 from gui.widgets.folder_picker import FolderPicker
 from gui.widgets.log_panel import LogPanel
 from gui.widgets.options_panel import OptionsPanel
@@ -145,13 +146,12 @@ class AnimeSubToolApp(QMainWindow):
     def _setup_statusbar(self):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage("Ready — Select a folder to begin")
+        self.status_bar.showMessage("Ready")
 
     _page_header = staticmethod(page_header)
 
     def _setup_ui(self):
-        from gui.widgets.animated_background import AnimatedBackground
-        central = AnimatedBackground()
+        central = QWidget()
         self.setCentralWidget(central)
 
         root = QHBoxLayout(central)
@@ -167,7 +167,7 @@ class AnimeSubToolApp(QMainWindow):
 
         content = QWidget()
         main_layout = QVBoxLayout(content)
-        main_layout.setContentsMargins(36, 30, 36, 24)
+        main_layout.setContentsMargins(32, 28, 32, 24)
         main_layout.setSpacing(0)
         root.addWidget(content, 1)
 
@@ -177,38 +177,37 @@ class AnimeSubToolApp(QMainWindow):
         step1 = QWidget()
         s1_layout = QVBoxLayout(step1)
         s1_layout.setContentsMargins(0, 0, 0, 0)
-        s1_layout.setSpacing(16)
+        s1_layout.setSpacing(24)
 
         self.folder_picker = FolderPicker()
         self.folder_picker.path_changed.connect(self._on_path_changed)
 
-        self.watch_cb = QCheckBox("Watch folder — rescan automatically when new files arrive")
+        self.watch_cb = QCheckBox("Rescan automatically when files are added")
         self.watch_cb.toggled.connect(self._toggle_watcher)
 
-        self.scan_btn = QPushButton("SCAN FOLDER  ▸")
+        self.scan_btn = QPushButton("Scan folder")
         self.scan_btn.setObjectName("primaryButton")
-        self.scan_btn.setFixedSize(230, 48)
+        self.scan_btn.setFixedHeight(40)
+        self.scan_btn.setMinimumWidth(140)
         self.scan_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.scan_btn.clicked.connect(lambda: self._run_scan())
-        add_glow(self.scan_btn, Colors.blue, 28)
 
         actions = QHBoxLayout()
+        actions.setSpacing(16)
         actions.addWidget(self.watch_cb)
         actions.addStretch()
         actions.addWidget(self.scan_btn)
 
         s1_layout.addWidget(self._page_header(
-            "SELECT SOURCE", "Pick the folder that holds the season's episodes and its subtitle files."))
-        s1_layout.addSpacing(8)
-        s1_layout.addWidget(self.folder_picker)
-        s1_layout.addStretch(1)
+            "Merge a season", "Pick the folder that holds the episodes and their subtitle files."))
+        s1_layout.addWidget(self.folder_picker, 1)
         s1_layout.addLayout(actions)
 
         # ─── Step 2: Preview ───
         step2 = QWidget()
         s2_layout = QVBoxLayout(step2)
         s2_layout.setContentsMargins(0, 0, 0, 0)
-        s2_layout.setSpacing(14)
+        s2_layout.setSpacing(20)
 
         self.preview_panel = PreviewPanel()
         self.preview_panel.status_message.connect(self.status_bar_message)
@@ -219,27 +218,29 @@ class AnimeSubToolApp(QMainWindow):
         self.options_panel.setFixedWidth(340)
 
         split = QHBoxLayout()
-        split.setSpacing(18)
+        split.setSpacing(20)
         split.addWidget(self.preview_panel, 1)
         split.addWidget(self.options_panel)
 
         nav2 = QHBoxLayout()
-        back2_btn = QPushButton("◂  BACK")
-        back2_btn.setFixedHeight(44)
+        back2_btn = QPushButton("Back")
+        back2_btn.setObjectName("ghostButton")
+        back2_btn.setIcon(icon("chevron_left", Colors.text_secondary))
+        back2_btn.setFixedHeight(40)
         back2_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         back2_btn.clicked.connect(lambda: self._go_to_step(0))
-        self.process_btn = QPushButton("START PROCESSING  ▸")
+        self.process_btn = QPushButton("Start processing")
         self.process_btn.setObjectName("primaryButton")
-        self.process_btn.setFixedSize(250, 48)
+        self.process_btn.setFixedHeight(40)
+        self.process_btn.setMinimumWidth(160)
         self.process_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.process_btn.clicked.connect(self._start_processing)
-        add_glow(self.process_btn, Colors.blue, 28)
         nav2.addWidget(back2_btn)
         nav2.addStretch()
         nav2.addWidget(self.process_btn)
 
         s2_layout.addWidget(self._page_header(
-            "PREVIEW", "Check every episode got the right subtitle, then tune the options on the right."))
+            "Check the pairs", "Each episode and the subtitle it gets. Click a subtitle to change it."))
         s2_layout.addLayout(split, 1)
         s2_layout.addLayout(nav2)
 
@@ -247,14 +248,14 @@ class AnimeSubToolApp(QMainWindow):
         step3 = QWidget()
         s3_layout = QVBoxLayout(step3)
         s3_layout.setContentsMargins(0, 0, 0, 0)
-        s3_layout.setSpacing(16)
+        s3_layout.setSpacing(24)
 
         self.progress_panel = ProgressPanel()
         self.progress_panel.cancel_requested.connect(self._cancel_processing)
         self.log_panel = LogPanel()
 
         s3_layout.addWidget(self._page_header(
-            "PROCESSING", "Merging subtitles and cleaning tracks. The original files are never modified."))
+            "Merging", "Writing new files. The original episodes are never modified."))
         s3_layout.addWidget(self.progress_panel)
         s3_layout.addWidget(self.log_panel, 1)
 
@@ -359,7 +360,7 @@ class AnimeSubToolApp(QMainWindow):
         if self._batch_running():
             self._process_worker.cancel()
             self.progress_panel.cancel_btn.setEnabled(False)
-            self.progress_panel.cancel_btn.setText("CANCELLING…")
+            self.progress_panel.cancel_btn.setText("Cancelling…")
             self.log_panel.append_log(
                 "Cancel requested: episodes already running will finish, the rest are skipped.", "WARNING")
 
@@ -390,7 +391,7 @@ class AnimeSubToolApp(QMainWindow):
             if self.watcher is not None:
                 self.watcher.stop()
                 self.watcher = None
-                self.status_bar.showMessage("Stopped watching folder.")
+                self.status_bar.showMessage("Stopped watching the folder")
 
     def _on_folder_changed(self):
         self._run_scan(auto=True)
@@ -413,8 +414,8 @@ class AnimeSubToolApp(QMainWindow):
             return
 
         self.scan_btn.setEnabled(False)
-        self.scan_btn.setText("SCANNING…")
-        self.status_bar.showMessage("Scanning folder...")
+        self.scan_btn.setText("Scanning…")
+        self.status_bar.showMessage("Scanning folder…")
 
         worker = ScanWorker(path, self.config, auto=auto,
                             subtitle_language=self._subtitle_language())
@@ -430,7 +431,7 @@ class AnimeSubToolApp(QMainWindow):
         if worker is not None:
             worker.deleteLater()
         self.scan_btn.setEnabled(True)
-        self.scan_btn.setText("SCAN FOLDER  ▸")
+        self.scan_btn.setText("Scan folder")
         if self._rescan_pending:
             self._rescan_pending = False
             self._run_scan(auto=True)
@@ -494,9 +495,9 @@ class AnimeSubToolApp(QMainWindow):
         self._go_to_step(2)
         self.progress_panel.reset()
         self.progress_panel.cancel_btn.setEnabled(True)
-        self.progress_panel.cancel_btn.setText("CANCEL")
+        self.progress_panel.cancel_btn.setText("Cancel")
         self.log_panel.clear()
-        self.status_bar.showMessage("Dry run..." if options.dry_run else "Processing...")
+        self.status_bar.showMessage("Dry run…" if options.dry_run else "Merging…")
 
         worker = ProcessWorker(self.scan_result, options, self.config)
         worker.progress_updated.connect(self.progress_panel.update_progress)
@@ -513,8 +514,8 @@ class AnimeSubToolApp(QMainWindow):
             worker.deleteLater()
 
     def _on_processing_completed(self, result):
-        self.results_panel.show_results(result)
-        self.status_bar.showMessage(self.results_panel.title.text().title())
+        self.results_panel.show_results(result, self.scan_result.matches if self.scan_result else None)
+        self.status_bar.showMessage(self.results_panel.title.text())
         self._go_to_step(3)
 
     def _on_processing_error(self, err):

@@ -370,7 +370,7 @@ def test_watch_rescan_keeps_manual_picks_and_scan_button_resets(window, tmp_path
     assert subs_of(window) == expected + [None]
     assert all(m.is_manual for m in window.scan_result.matches[:3])
     assert "kept 3 subtitle choice(s)" in window.status_bar.currentMessage()
-    assert "3 PAIRED BY HAND" in panel.summary_label.text()
+    assert "3 paired by hand" in panel.summary_label.text()
 
     # A picked subtitle is deleted: that pick is dropped, the others stay
     (tmp_path / "Other.srt").unlink()
@@ -378,8 +378,8 @@ def test_watch_rescan_keeps_manual_picks_and_scan_button_resets(window, tmp_path
     assert subs_of(window) == ["Show - 02.srt", None, "Extra subs.srt", None]
     message = window.status_bar.currentMessage()
     assert "kept 2 subtitle choice(s)" in message and "dropped 1" in message
-    assert panel.table.item(1, 2).text().startswith("— none (moved to EP 1) —")   # R5-08
-    assert "2 PAIRED BY HAND" in panel.summary_label.text()
+    assert panel.table.item(1, 2).text().startswith("None, moved to episode 1")   # R5-08
+    assert "2 paired by hand" in panel.summary_label.text()
 
     # The SCAN FOLDER button starts afresh
     rescan(window, auto=False)
@@ -394,8 +394,8 @@ def test_season_and_partial_notes_show_in_the_preview(window, tmp_path):
     write_srt(tmp_path / "Show - 03 [Signs].srt")
     window.folder_picker.set_path(str(tmp_path))
     panel = rescan(window, auto=False)
-    assert panel.table.item(0, 4).text() == "⚠ CHECK"
+    assert panel.table.item(0, 4).text() == "Check"
     assert "the subtitle is season 2" in panel.table.item(0, 4).toolTip()
-    assert panel.table.item(1, 4).text() == "⚠ CHECK"
+    assert panel.table.item(1, 4).text() == "Check"
     assert "partial or alternative track" in panel.table.item(1, 4).toolTip()
-    assert "2 TO CHECK" in panel.summary_label.text()
+    assert "2 to check" in panel.summary_label.text()

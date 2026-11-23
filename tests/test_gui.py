@@ -167,13 +167,13 @@ def test_preview_flags_uncertain_rows_and_shows_encoding(window, tmp_path):
     rows = {panel.table.item(r, 1).text(): r for r in range(panel.table.rowCount())}
 
     low = rows["[Cleo]Mousou_Dairinin_-_01.mkv"]
-    assert "CHECK" in panel.table.item(low, 4).text()
+    assert "Check" in panel.table.item(low, 4).text()
     assert "Paranoia Agent" in panel.table.item(low, 2).text()
     assert "Windows-1256 (Arabic)" in panel.table.item(low, 2).toolTip()
-    assert panel.table.item(rows["Same - 02.mkv"], 4).text() == "READY"
-    assert panel.table.item(rows["Lonely - 03.mkv"], 4).text() == "NO SUB"
+    assert panel.table.item(rows["Same - 02.mkv"], 4).text() == "Ready"
+    assert panel.table.item(rows["Lonely - 03.mkv"], 4).text() == "No subtitle"
     summary = panel.summary_label.text()
-    assert "1 TO CHECK" in summary and "1 WITHOUT SUBTITLE" in summary
+    assert "1 to check" in summary and "1 without a subtitle" in summary
 
 
 def test_tooltips_never_render_markup():
@@ -283,12 +283,12 @@ def result_of(*statuses, dry_run=False):
 
 
 @pytest.mark.parametrize("statuses, dry_run, state, title", [
-    ((S.COMPLETED, S.COMPLETED), False, "complete", "MISSION COMPLETE"),
-    ((S.COMPLETED, S.SKIPPED), False, "complete", "MISSION COMPLETE"),
-    ((S.COMPLETED, S.FAILED), False, "errors", "COMPLETED WITH ERRORS"),
-    ((S.COMPLETED, S.CANCELLED, S.CANCELLED), False, "cancelled", "CANCELLED"),
-    ((S.COMPLETED, S.COMPLETED), True, "dry_run", "DRY RUN — NOTHING WRITTEN"),
-    ((S.SKIPPED, S.SKIPPED), False, "nothing", "NOTHING PROCESSED"),
+    ((S.COMPLETED, S.COMPLETED), False, "complete", "Season merged"),
+    ((S.COMPLETED, S.SKIPPED), False, "complete", "Season merged"),
+    ((S.COMPLETED, S.FAILED), False, "errors", "Merged with errors"),
+    ((S.COMPLETED, S.CANCELLED, S.CANCELLED), False, "cancelled", "Cancelled"),
+    ((S.COMPLETED, S.COMPLETED), True, "dry_run", "Dry run, nothing written"),
+    ((S.SKIPPED, S.SKIPPED), False, "nothing", "Nothing processed"),
 ])
 def test_results_states(qapp, statuses, dry_run, state, title):
     from gui.widgets.results_panel import ResultsPanel
@@ -304,7 +304,7 @@ def test_results_states(qapp, statuses, dry_run, state, title):
     assert panel.subtitle.textFormat() == Qt.TextFormat.PlainText
     if dry_run:
         assert "No file was created" in panel.subtitle.text()
-        assert panel.success_label.text() == "WOULD DO"
+        assert panel.success_label.text() == "Would merge"
 
 
 def test_open_output_folder_targets_the_real_output(window, season, monkeypatch):
@@ -487,7 +487,7 @@ def test_folder_picker_counts_like_the_scanner(qapp, tmp_path):
         (tmp_path / name).write_bytes(b"x")
     picker = FolderPicker()
     picker.set_path(str(tmp_path))
-    assert "2 EPISODE(S)" in picker.status_label.text() and "2 SUBTITLE(S)" in picker.status_label.text()
+    assert picker.status_label.text() == "2 episodes · 2 subtitle files"
 
 
 def test_about_dialog_shows_third_party_licenses(qapp):
@@ -666,12 +666,12 @@ def test_preview_marks_uncertain_encoding(window, season):
     scan = ProcessingEngine(window.config).scan_and_match(season)
     window.preview_panel.populate(scan)
     table = window.preview_panel.table
-    assert table.item(0, 4).text() == "READY"
-    assert table.item(1, 4).text() == "⚠ ENCODING"
-    assert table.item(1, 2).text().startswith("⚠ ")
+    assert table.item(0, 4).text() == "Ready"
+    assert table.item(1, 4).text() == "Check encoding"
+    assert "Encoding:" in table.item(1, 2).toolTip()
     assert "encoding uncertain — choose it in Encoding" in table.item(1, 2).toolTip()
     assert "encoding uncertain — choose it in Encoding" in table.item(1, 4).toolTip()
-    assert "ENCODING UNCERTAIN" in window.preview_panel.summary_label.text()
+    assert "uncertain encoding" in window.preview_panel.summary_label.text()
 
 
 def test_sync_warns_on_uncertain_encoding_and_reloads_with_the_chosen_one(sync, dialogs, tmp_path):

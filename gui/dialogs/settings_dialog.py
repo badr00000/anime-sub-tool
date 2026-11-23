@@ -32,7 +32,7 @@ class SettingsDialog(QDialog):
 
         # Title
         title = QLabel("Settings")
-        title.setStyleSheet(f"font-size: 20px; font-weight: 700; color: {Colors.blue}; letter-spacing: 2px;")
+        title.setProperty("role", "pageTitle")
         layout.addWidget(title)
 
         # MKVToolNix section
@@ -62,7 +62,7 @@ class SettingsDialog(QDialog):
         self.mkv_invalid = QWidget()
         invalid_row = QHBoxLayout(self.mkv_invalid)
         invalid_row.setContentsMargins(0, 0, 0, 0)
-        invalid_lbl = QLabel("⚠ No mkvmerge in this folder: the bundled copy is used.")
+        invalid_lbl = QLabel("No mkvmerge in this folder, so the bundled copy is used")
         invalid_lbl.setTextFormat(Qt.TextFormat.PlainText)
         invalid_lbl.setProperty("role", "bad")
         invalid_lbl.setWordWrap(True)
@@ -76,30 +76,33 @@ class SettingsDialog(QDialog):
         self._update_mkv_state()
 
         # Processing section
-        proc_group = QGroupBox("Processing Defaults")
+        proc_group = QGroupBox("Defaults")
         proc_layout = QFormLayout(proc_group)
+        proc_layout.setVerticalSpacing(12)
+        proc_layout.setHorizontalSpacing(16)
+        proc_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         self.workers_spin = QSpinBox()
         self.workers_spin.setRange(MIN_PARALLEL_WORKERS, MAX_PARALLEL_WORKERS)
         self.workers_spin.setValue(config.default_workers)
-        proc_layout.addRow("Episodes at once:", self.workers_spin)
+        proc_layout.addRow("Episodes at once", self.workers_spin)
 
         self.subfolder_edit = QLineEdit(config.output_subfolder)
-        proc_layout.addRow("Output subfolder:", self.subfolder_edit)
+        proc_layout.addRow("Output subfolder", self.subfolder_edit)
 
         self.sub_lang_edit = LanguageCombo()
         self.sub_lang_edit.set_value(config.subtitle_language)
-        proc_layout.addRow("Default subtitle language:", self.sub_lang_edit)
+        proc_layout.addRow("Subtitle language", self.sub_lang_edit)
 
         self.sub_name_edit = QLineEdit(config.subtitle_name)
-        proc_layout.addRow("Subtitle name:", self.sub_name_edit)
+        proc_layout.addRow("Subtitle track name", self.sub_name_edit)
         _follow_language(self.sub_lang_edit, self.sub_name_edit)
 
         # Buttons
         btn_layout = QHBoxLayout()
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
-        save_btn = QPushButton("Save Settings")
+        save_btn = QPushButton("Save")
         save_btn.setObjectName("primaryButton")
         save_btn.clicked.connect(self._save)
 

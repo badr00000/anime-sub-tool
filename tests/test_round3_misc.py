@@ -220,7 +220,7 @@ def test_gui_preview_table_shows_the_extra_kind(qapp, tmp_path):
     panel = PreviewPanel()
     panel.populate(scan)
     labels = {panel.table.item(r, 0).text() for r in range(panel.table.rowCount())}
-    assert labels == {"1", "NCOP 1"}
+    assert labels == {"EP 01", "NCOP 1"}
 
 
 # ── R3B-07: an unreadable config is kept before it is overwritten ─────────────

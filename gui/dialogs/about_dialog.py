@@ -65,17 +65,17 @@ class AboutDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.setSpacing(16)
-        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setContentsMargins(32, 32, 32, 32)
 
         # Title
         title = QLabel(APP_NAME)
-        title.setStyleSheet(f"font-size: 24px; font-weight: 800; color: {Colors.blue_bright};")
+        title.setStyleSheet(f"font-size: 20px; font-weight: 600; color: {Colors.text};")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setWordWrap(True)
 
         # Version
         version = QLabel(f"Version {APP_VERSION}")
-        version.setStyleSheet(f"font-size: 14px; color: {Colors.blue}; font-weight: bold;")
+        version.setStyleSheet(f"font-family: {Colors.font_mono}; font-size: 12px; color: {Colors.text_muted};")
         version.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Description
