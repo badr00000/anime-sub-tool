@@ -1,5 +1,5 @@
 """
-Click-based CLI for Anime Subtitle Automation Tool v2.0.
+Click-based CLI for Anime Subtitle Automation Tool.
 
 Provides commands: process, preview, scan, shift, version
 """
@@ -44,7 +44,7 @@ def _clip(name: str, width: int = 40) -> str:
 
 @click.group()
 def cli():
-    """Anime Subtitle Automation Tool v2.0"""
+    """Anime Subtitle Automation Tool"""
     setup_logging(console=True)
 
 

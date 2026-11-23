@@ -1,5 +1,5 @@
 """
-Anime Subtitle Automation Tool v2.0 — Main Application Window
+Anime Subtitle Automation Tool — Main Application Window
 
 PySide6 QMainWindow with step-based navigation (Input → Preview → Processing → Results).
 Background work runs in QThread with Signal/Slot communication.

@@ -1,5 +1,5 @@
 """
-Anime Subtitle Automation Tool v2.0 — Constants & Defaults
+Anime Subtitle Automation Tool — Constants & Defaults
 
 Central location for all magic strings, supported formats, language codes,
 and default values used throughout the application.
@@ -12,7 +12,7 @@ from pathlib import Path
 # ──────────────────────────────────────────────────────────────
 
 APP_NAME = "Anime Subtitle Automation Tool"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 APP_AUTHOR = "AnimeSubTool"
 APP_ID = "anime-sub-tool"
 

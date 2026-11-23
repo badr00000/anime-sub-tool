@@ -1,5 +1,5 @@
 """
-Anime Subtitle Automation Tool v2.0 — Path Utilities
+Anime Subtitle Automation Tool — Path Utilities
 
 Bundle-aware resource lookup, the app data directory and output path rules.
 """

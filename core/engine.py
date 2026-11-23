@@ -1,5 +1,5 @@
 """
-Anime Subtitle Automation Tool v2.0 — Processing Engine
+Anime Subtitle Automation Tool — Processing Engine
 
 High-level orchestrator that ties together scanning, matching,
 previewing, and batch processing.

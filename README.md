@@ -1,4 +1,4 @@
-# Anime Subtitle Automation Tool v2.0
+# Anime Subtitle Automation Tool
 
 A Windows desktop tool that merges a season of anime episodes with their
 downloaded subtitle files in one go. It pairs each episode with its subtitle by

@@ -1,5 +1,5 @@
 """
-Anime Subtitle Automation Tool v2.0 — Data Models
+Anime Subtitle Automation Tool — Data Models
 
 Unified data structures used by core engine, GUI, and CLI layers.
 """

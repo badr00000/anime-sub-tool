@@ -1,5 +1,5 @@
 """
-Anime Subtitle Automation Tool v2.0 — Subtitle file helpers
+Anime Subtitle Automation Tool — Subtitle file helpers
 
 Character-set detection for text subtitles. Fansub SRT/ASS files are often saved
 in a legacy code page (Windows-1256 for Arabic, Shift-JIS for Japanese, ...)

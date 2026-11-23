@@ -1,5 +1,5 @@
 """
-Anime Subtitle Automation Tool v2.0 — Configuration Manager
+Anime Subtitle Automation Tool — Configuration Manager
 
 Loads and saves the persistent configuration (JSON in the user's home directory).
 Everything read from disk is validated: a damaged or hand-edited file can cost

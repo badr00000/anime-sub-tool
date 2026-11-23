@@ -1,5 +1,5 @@
 """
-Anime Subtitle Automation Tool v2.0 — Watch Folder Service
+Anime Subtitle Automation Tool — Watch Folder Service
 
 Uses watchdog to monitor a folder for new video or subtitle files.
 Includes debouncing to prevent triggering multiple scans during a large file copy.

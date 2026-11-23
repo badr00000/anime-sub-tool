@@ -1,5 +1,5 @@
 """
-Anime Subtitle Automation Tool v2.0 — Input Validators
+Anime Subtitle Automation Tool — Input Validators
 
 Validation helpers that return validated values or raise on error.
 """

@@ -1,5 +1,5 @@
 """
-Anime Subtitle Automation Tool v2.0 — Logger
+Anime Subtitle Automation Tool — Logger
 
 Every module logs to a child of one "anime-sub-tool" logger. setup_logging()
 attaches a size-capped rotating file (and optionally the console) to it once.
