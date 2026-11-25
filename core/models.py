@@ -165,6 +165,15 @@ class ProcessingOptions:
     # "auto" detects (UTF-8 / Windows-1256 / ...), or an explicit charset such as "cp1256".
     subtitle_charset: str = "auto"
 
+    @property
+    def cleans_without_subtitle(self) -> bool:
+        """True when an episode with no subtitle file is still worth processing:
+        the user asked for it, or chose original subtitles to keep (keep only the
+        Arabic track already inside) or a track to fix."""
+        return bool(self.process_unmatched
+                    or (self.remove_existing_subs and self.keep_sub_langs)
+                    or self.edit_target_lang)
+
     @classmethod
     def from_config(cls, config: "AppConfig") -> "ProcessingOptions":
         """Options carrying the defaults the user saved in Settings."""

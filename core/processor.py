@@ -68,7 +68,7 @@ class EpisodeProcessor:
         video_path = match.video.filepath
         output_path = self.output_path(video_path)
 
-        if match.subtitle is None and not self.options.process_unmatched:
+        if match.subtitle is None and not self.options.cleans_without_subtitle:
             return ProcessingResult(status=ProcessingStatus.SKIPPED, output_path=output_path,
                                     message=f"No matching subtitle for {video_path.name}")
 
@@ -203,9 +203,21 @@ class EpisodeProcessor:
         # (usually the English track, flagged default) would otherwise still be
         # what players show. Originals stay as they are when the new one is not default.
         clear_default_ids: list[int] = []
+        default_track_id = None
+        kept = [t.id for t in sub_tracks] if sub_track_ids is None else sub_track_ids
         if sub_path and self.options.set_default:
-            kept = [t.id for t in sub_tracks] if sub_track_ids is None else sub_track_ids
             clear_default_ids = [i for i in kept if i is not None]
+        elif not sub_path and self.options.set_default and self.options.remove_existing_subs:
+            # No new subtitle: the kept original in the wanted language (the Arabic
+            # track already inside) becomes the one players show.
+            wanted = self.options.subtitle_language
+            if edited_track_id is not None and same_language(self.options.edit_new_lang, wanted):
+                default_track_id = edited_track_id
+            else:
+                default_track_id = next((t.id for t in sub_tracks if t.id in kept
+                                         and same_language(t.language, wanted)), None)
+            if default_track_id is not None:
+                clear_default_ids = [i for i in kept if i != default_track_id]
 
         # 4. The output folder is only created now, when we really write
         try:
@@ -251,6 +263,7 @@ class EpisodeProcessor:
                 sub_offset_ms=self.options.subtitle_offset_ms,
                 sub_charset=sub_charset,
                 clear_default_track_ids=clear_default_ids,
+                default_track_id=default_track_id,
                 progress_callback=progress_callback,
                 cancel_event=cancel_event,
             )

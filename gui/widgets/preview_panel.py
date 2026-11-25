@@ -18,6 +18,11 @@ from gui.theme import Colors, plain_tooltip
 _UNCERTAIN = (MatchConfidence.MEDIUM, MatchConfidence.LOW)
 
 SUBTITLE_COLUMN = 2
+# What happens to an episode that gets no subtitle file
+_NO_SUB_RULE = ("It is still cleaned (no subtitle added) when 'Except these languages' "
+                "keeps some original subtitles, a track is set to be fixed, or 'Also process "
+                "episodes that have no subtitle' is ticked. Otherwise it is skipped.")
+
 NONE_LABEL = "None"
 PICK_HINT = ("Double-click, F2 or Enter to pick another subtitle for this episode "
              "(or none). Choices made by hand are reset when the folder is rescanned "
@@ -403,15 +408,12 @@ class PreviewPanel(QWidget):
             if not match.is_matched:
                 status_text, status_color = "No subtitle", Colors.negative
                 if match.is_manual:
-                    status_tip = ("You chose no subtitle for this episode. It is skipped unless "
-                                  "'Also process episodes that have no subtitle' is ticked.")
+                    status_tip = "You chose no subtitle for this episode. " + _NO_SUB_RULE
                 elif match.moved_to:
-                    status_tip = (f"Its subtitle was moved to episode {match.moved_to}. The episode "
-                                  "is skipped unless 'Also process episodes that have no "
-                                  "subtitle' is ticked.")
+                    status_tip = (f"Its subtitle was moved to episode {match.moved_to}. "
+                                  + _NO_SUB_RULE)
                 else:
-                    status_tip = ("No subtitle with this episode number. The episode is skipped "
-                                  "unless 'Also process episodes that have no subtitle' is ticked.")
+                    status_tip = "No subtitle file with this episode number. " + _NO_SUB_RULE
             elif match.language_warning:
                 status_text, status_color = "Check", Colors.warning
                 status_tip = (f"Check: {match.language_warning}. "

@@ -215,12 +215,15 @@ class MKVToolsWrapper:
               sub_offset_ms: int = 0,
               sub_charset: Optional[str] = None,
               clear_default_track_ids: Optional[list[int]] = None,
+              default_track_id: Optional[int] = None,
               progress_callback: Optional[Callable[[int], None]] = None,
               cancel_event: Optional[threading.Event] = None) -> ProcessingResult:
         """Build and execute mkvmerge command. Parse real-time 'Progress: XX%' from stdout.
 
         clear_default_track_ids: original tracks whose "default track" flag is
         switched off, so the new subtitle is the one players pick.
+        default_track_id: an original track flagged default instead (no new
+        subtitle; the kept track in the wanted language becomes the one shown).
         """
         try:
             video_arg = _path_arg(video_path)
@@ -258,6 +261,8 @@ class MKVToolsWrapper:
 
         for track_id in clear_default_track_ids or ():
             cmd.extend(["--default-track-flag", f"{int(track_id)}:no"])
+        if default_track_id is not None:
+            cmd.extend(["--default-track-flag", f"{int(default_track_id)}:yes"])
 
         cmd.append(video_arg)
 

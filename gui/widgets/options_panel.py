@@ -162,9 +162,10 @@ class OptionsPanel(QWidget):
         self.overwrite_cb.setToolTip("Unticked: an episode whose output file already exists is skipped.")
 
         self.unmatched_cb = QCheckBox("Also process episodes that have no subtitle")
-        self.unmatched_cb.setToolTip("Unticked: episodes without a matching subtitle are skipped.\n"
-                                     "Ticked: they are still cleaned (audio / subtitle filters), "
-                                     "with no subtitle added.")
+        self.unmatched_cb.setToolTip("Ticked: episodes without a subtitle file are still cleaned "
+                                     "(audio / subtitle filters), with no subtitle added.\n"
+                                     "They are always cleaned when 'Except these languages' keeps "
+                                     "some original subtitles, or a track is set to be fixed.")
 
         self.dry_run_cb = QCheckBox("Dry run, write nothing")
 
