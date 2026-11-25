@@ -12,7 +12,7 @@ from pathlib import Path
 # ──────────────────────────────────────────────────────────────
 
 APP_NAME = "Anime Subtitle Automation Tool"
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.1.1"
 APP_AUTHOR = "AnimeSubTool"
 APP_ID = "anime-sub-tool"
 
